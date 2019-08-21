@@ -90,7 +90,7 @@ def writeScores(scores, ids, destination):
     with open(destination, 'w') as ostream:
         ostream.write("ID\tScore\n")
         for s, id, in zip(scores, ids):
-            ostream.write(str(s) + '\t' + str(id) + '\n')
+            ostream.write(str(id) + '\t' + str(s) + '\n')
 
     return
 
@@ -110,14 +110,18 @@ if __name__ == '__main__':
     parser.add_argument("--train", action = "store_true", help = "Select this if training a PRS model. This will save a list of the SNPs we include in the test, and can also draw some plots (?)")
 
     args = parser.parse_args()
+    print("Loading summary statistics and relevant genotype information....")
     stats, header = loadSummaryStats(args.sum_stats, args.ss_format)
-    variants = loadGenoVars(args.plink_snps)
+    variants = loadGenoVars(args.plink_snps + ".pvar")
+    print("Filtering SNPs...")
     snp_list, stats_filtered, variants_filtered = filterSNPs(args.pval, args.maf, stats, variants, header) #TODO: makes sure the variatns are in order.
 
     #Run plink filtering on the bed file, and then load it into memory
-    snp_matrix = plinkToMatrix(snp_list, stats_filtered, variants_filtered)
+    print("Building a PLINK matrix...")
+    snp_matrix = plinkToMatrix(snp_list, args.plink_snps)
     #stats was output of filterSNPs
-    scores = calculatePRS(stats_filtered, header, snp_matrix)
+    print("Calculating PRSs")
+    scores = calculatePRS(stats_filtered, snp_matrix)
     patient_ids  = getPatientIDs(snp_matrix)
     writeScores(scores, patient_ids, args.output)
 
