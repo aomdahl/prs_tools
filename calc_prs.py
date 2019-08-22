@@ -9,6 +9,7 @@ import scipy as sp
 import plinkio 
 import pandas as pd
 from datetime import date
+import sys
 
 #General reference things
 CHR = "chr"
@@ -18,8 +19,8 @@ EFFAL = "effect_allele"
 EFFALFREQ = "effect_allele_freq"
 BETA = "beta"
 PVAL = "pval"
-REF= "ref_allele"
-ALT = "alt_allele"
+REF= "REF" #reference allele
+ALT = "ALT" #Alternate allele
 
 def getStatHeaders(setting):
     if setting == "SAIGE":
@@ -34,6 +35,8 @@ def loadSummaryStats(sum_path, sum_format):
     ss = pd.read_csv(sum_path, sep = ' ', index_col = False, 
                      dtype={h[CHR]:'category', h[POS]:'int32', h[ALT]: 'category', h[REF]:'category', h[BETA]:'float64', h[PVAL]:'float64'})
     ss[REFID] = ss[h[CHR]].astype(str) + ":" + ss[h[POS]].astype(str)
+    #Remove biallelic SNPs
+    #Remove ambiguous SNPs
     return ss, h
 
 def loadGenoVars(snp_file):
@@ -56,11 +59,22 @@ def calculatePRS(ss, geno_mat):
     snp_matrix = geno_mat.loc[id_list]
     #do the necessary math: choose all the right rows.
     #Assuming the alt are the affect alleles.. that is what we assume. Was true in the small number of cases I looked at.
+    #Check all the values are correct....
+    #get the ALT column of the SNP matrix and make sure it matches with the alleles for which we have effects.
+    assert(sameAlleleAssesment(ss[ALT].values, geno_mat[ALT].values))
+    assert(sameAlleleAssesment(ss[REF].values, geno_mat[REF].values))
     dat = (2-snp_matrix.iloc[:,5:]).values
     betas = stats_filtered[BETA].values
     scores = np.matmul(betas, dat)
     return scores
 
+def sameAlleleAssesment(s1, s2):
+    sames = (s1 == s2)
+    if sames.all():
+        return True
+    else:
+        print("There are differences. Investigate further (line 73)")
+        sys.exit()
 
 #TODO: This is slow, probably because of the sorting. Come up with a way to maintain order and speed.
 def getIntersectingData(ss, vars):
@@ -78,7 +92,7 @@ def plinkToMatrix(snp_keep, args):
     list_dir = writeSNPIDs(snp_keep)
     #Make the new matrix
     from subprocess import call 
-    call(["plink2", "--pfile", args, "--not-chr", "X", "--extract", list_dir, "--out", "mat_form_tmp", "--export", "A-transpose"]) 
+    call(["plink2", "--pfile", args, "--not-chr", "X", "--extract", list_dir, "--out", "mat_form_tmp", "--export", "A-transpose", "--biallelic-only", "strict"]) 
     return pd.read_csv("mat_form_tmp.traw", sep = "\t", index_col="SNP")
 
 def getPatientIDs(snp_matrix):
@@ -100,7 +114,7 @@ def writeSNPIDs(ids):
 
 if __name__ == '__main__':
 
-    parser = argparse.ArgumentParser(description = "Basic tools for calculating rudimentary Polygenic Risk Scores (PRSs). This uses PLINK bed/bim/fam files and GWAS summary stats as standard inputs. Please use PLINK 1.9")
+    parser = argparse.ArgumentParser(description = "Basic tools for calculating rudimentary Polygenic Risk Scores (PRSs). This uses PLINK bed/bim/fam files and GWAS summary stats as standard inputs. Please use PLINK 2, and ensure that there are no multi-allelic SNPs (PLINK biallelic strict))
     parser.add_argument("-snps", "--plink_snps", help = "Plink file handle for actual SNP data (omit the .extension portion)")
     parser.add_argument("-ss", "--sum_stats", help = "Path to summary stats file. Be sure to specify format if its not DEFAULT. Assumes tab delimited")
     parser.add_argument("--ss_format", help = "Format of the summary statistics", default = "SAIGE", choices = ["DEFAULT", "SAIGE"])
