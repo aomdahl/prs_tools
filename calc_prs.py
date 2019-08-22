@@ -9,6 +9,7 @@ import scipy as sp
 import plinkio 
 import pandas as pd
 from datetime import date
+import sys
 
 #General reference things
 CHR = "chr"
@@ -18,8 +19,8 @@ EFFAL = "effect_allele"
 EFFALFREQ = "effect_allele_freq"
 BETA = "beta"
 PVAL = "pval"
-REF= "ref_allele"
-ALT = "alt_allele"
+REF= "REF" #reference allele
+ALT = "ALT" #Alternate allele
 
 def getStatHeaders(setting):
     if setting == "SAIGE":
@@ -34,6 +35,9 @@ def loadSummaryStats(sum_path, sum_format):
     ss = pd.read_csv(sum_path, sep = ' ', index_col = False, 
                      dtype={h[CHR]:'category', h[POS]:'int32', h[ALT]: 'category', h[REF]:'category', h[BETA]:'float64', h[PVAL]:'float64'})
     ss[REFID] = ss[h[CHR]].astype(str) + ":" + ss[h[POS]].astype(str)
+    #Remove ambiguous SNPs
+    ss = ss.query((ALT != 'A' & REF != 'T') & (ALT != 'T' & REF != 'A') & (ALT != 'G' & REF != 'C') & (ALT != 'C' & REF != 'G'))
+        #Note: these are ambiguous because in a comparison to another dataset its unclear if A is T visa versa, so including these cases with complementary ALT and REF alleles is ambiguous.
     return ss, h
 
 def loadGenoVars(snp_file):
@@ -56,10 +60,19 @@ def calculatePRS(ss, geno_mat):
     snp_matrix = geno_mat.loc[id_list]
     #do the necessary math: choose all the right rows.
     #Assuming the alt are the affect alleles.. that is what we assume. Was true in the small number of cases I looked at.
+    #Check all the values are correct....
+    assert(sameAlleleAssesment(ss[ALT].values, snp_matrix[ALT].values))
+    print("Same alt alleles!")
+    assert(sameAlleleAssesment(ss[REF].values, snp_matrix[REF].values))
+    print("Same REF alleles!")
+    #get the ALT column of the SNP matrix and make sure it matches with the alleles for which we have effects.
     dat = (2-snp_matrix.iloc[:,5:]).values
     betas = stats_filtered[BETA].values
     scores = np.matmul(betas, dat)
     return scores
+
+def sameAlleleAssesment(s1, s2):
+    return (s1 == s2).all
 
 
 #TODO: This is slow, probably because of the sorting. Come up with a way to maintain order and speed.
@@ -68,9 +81,44 @@ def getIntersectingData(ss, vars):
     vars_ids = vars[REFID].sort_values()
     #select out the values in vars that are in the vars_keep list (make sure IN ORDER)
     vars_keep = vars[vars[REFID].isin(id_keep)].sort_values(by=REFID) #Remember, if its a 3 we ignore it- it means the data isn't available for them.
-    return ss[ss[REFID].isin(vars_keep[REFID])].sort_values(by=REFID), vars_keep, 
-    
+    return ss[ss[REFID].isin(vars_keep[REFID])].sort_values(by=REFID), vars_keep 
+"""Not using this like I thought I was
+def qualityControl(ss, geno_mat):
 
+    
+    Get the data after past quality control. Specifically checking for
+    1) Ambiguous SNPs (done earlier)
+    2) SNPs that need flipping.
+
+    #Make sure everything is in the right order
+    id_list = ss[REFID].values
+    snp_matrix = geno_mat.loc[id_list]
+
+    alt_same =  sameAlleleAssesment(ss[ALT].values, snp_matrix[ALT].values)
+    ref_same = sameAlleleAssesment(ss[REF].values, snp_matrix[REF].values)
+    #If they are the same, move on.
+    if alt_same and ref_same:
+            return True
+    else:
+        print("More advanced filtering engaged...")
+        complements = dict{'A':'T', 'T':'A', 'C':'G', 'G':'C'}
+
+        #Find where they are different
+        diffs_ss = ss.loc[(ss[ALT].values != np_matrix[ALT].values)]
+        diffs_snp = snp_matrix.loc[diffs_ss.index]
+        for i in range(0, len(diff_ss)):
+            ss_ = str(diffs_ss.iloc[i][ALT].value)
+            snp_ = str(diffs_snp.iloc[i][ALT].value)
+            #If they are ambiguous:
+            if complements[ss_] == snp_:
+                #omit this one from the list
+            elif complements[ss_] != snp_ and 
+
+        #If they are ambiguous, omit them
+        #If they 
+        
+    #If there are ambiguous SNPs (i.e. C in one and G in the other, or A in one and T in the other)
+"""
 
 def plinkToMatrix(snp_keep, args):
     #Write out the list of SNPs to keep
@@ -78,7 +126,7 @@ def plinkToMatrix(snp_keep, args):
     list_dir = writeSNPIDs(snp_keep)
     #Make the new matrix
     from subprocess import call 
-    call(["plink2", "--pfile", args, "--not-chr", "X", "--extract", list_dir, "--out", "mat_form_tmp", "--export", "A-transpose"]) 
+    call(["plink2", "--pfile", args, "--not-chr", "X", "--extract", list_dir, "--out", "mat_form_tmp", "--export", "A-transpose", "--biallelic-only", "strict"]) 
     return pd.read_csv("mat_form_tmp.traw", sep = "\t", index_col="SNP")
 
 def getPatientIDs(snp_matrix):
@@ -100,7 +148,7 @@ def writeSNPIDs(ids):
 
 if __name__ == '__main__':
 
-    parser = argparse.ArgumentParser(description = "Basic tools for calculating rudimentary Polygenic Risk Scores (PRSs). This uses PLINK bed/bim/fam files and GWAS summary stats as standard inputs. Please use PLINK 1.9")
+    parser = argparse.ArgumentParser(description = "Basic tools for calculating rudimentary Polygenic Risk Scores (PRSs). This uses PLINK bed/bim/fam files and GWAS summary stats as standard inputs. Please use PLINK 2, and ensure that there are no multi-allelic SNPs (PLINK biallelic strict))
     parser.add_argument("-snps", "--plink_snps", help = "Plink file handle for actual SNP data (omit the .extension portion)")
     parser.add_argument("-ss", "--sum_stats", help = "Path to summary stats file. Be sure to specify format if its not DEFAULT. Assumes tab delimited")
     parser.add_argument("--ss_format", help = "Format of the summary statistics", default = "SAIGE", choices = ["DEFAULT", "SAIGE"])
@@ -121,6 +169,7 @@ if __name__ == '__main__':
     snp_matrix = plinkToMatrix(snp_list, args.plink_snps)
     #stats was output of filterSNPs
     print("Calculating PRSs")
+    #stats_qc, snp_qc = qualityControl(stats_filtered, snp_matrix)
     scores = calculatePRS(stats_filtered, snp_matrix)
     patient_ids  = getPatientIDs(snp_matrix)
     writeScores(scores, patient_ids, args.output)
