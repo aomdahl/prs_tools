@@ -30,13 +30,14 @@ def getStatHeaders(setting):
         
         
         
-def loadSummaryStats(sum_path, sum_format):
+def loadSummaryStats(sum_path, sum_format, no_ambig):
     h = getStatHeaders(sum_format)
-    ss = pd.read_csv(sum_path, sep = ' ', index_col = False, 
-                     dtype={h[CHR]:'category', h[POS]:'int32', h[ALT]: 'category', h[REF]:'category', h[BETA]:'float64', h[PVAL]:'float64'})
+    ss = pd.read_csv(sum_path, sep = '\t', index_col = False, 
+                     dtype= { h[CHR]:'category', h[POS]:'int64', h[ALT]: 'category', h[REF]:'category', h[BETA]:'float64', h[PVAL]:'float64'})
     ss[REFID] = ss[h[CHR]].astype(str) + ":" + ss[h[POS]].astype(str)
     #Remove ambiguous SNPs
-    ss = ss.query((ALT != 'A' & REF != 'T') & (ALT != 'T' & REF != 'A') & (ALT != 'G' & REF != 'C') & (ALT != 'C' & REF != 'G'))
+    if not no_ambig:
+        ss = ss.query((ALT != 'A' & REF != 'T') & (ALT != 'T' & REF != 'A') & (ALT != 'G' & REF != 'C') & (ALT != 'C' & REF != 'G'))
         #Note: these are ambiguous because in a comparison to another dataset its unclear if A is T visa versa, so including these cases with complementary ALT and REF alleles is ambiguous.
     return ss, h
 
@@ -82,7 +83,8 @@ def getIntersectingData(ss, vars):
     #select out the values in vars that are in the vars_keep list (make sure IN ORDER)
     vars_keep = vars[vars[REFID].isin(id_keep)].sort_values(by=REFID) #Remember, if its a 3 we ignore it- it means the data isn't available for them.
     return ss[ss[REFID].isin(vars_keep[REFID])].sort_values(by=REFID), vars_keep 
-"""Not using this like I thought I was
+"""
+Not using this like I thought I was
 def qualityControl(ss, geno_mat):
 
     
@@ -119,14 +121,13 @@ def qualityControl(ss, geno_mat):
         
     #If there are ambiguous SNPs (i.e. C in one and G in the other, or A in one and T in the other)
 """
-
 def plinkToMatrix(snp_keep, args):
     #Write out the list of SNPs to keep
     snp_order = list(snp_keep.values)
     list_dir = writeSNPIDs(snp_keep)
     #Make the new matrix
     from subprocess import call 
-    call(["plink2", "--pfile", args, "--not-chr", "X", "--extract", list_dir, "--out", "mat_form_tmp", "--export", "A-transpose", "--biallelic-only", "strict"]) 
+    call(["plink2", "--pfile", args, "--not-chr", "X", "--extract", list_dir, "--out", "mat_form_tmp", "--export", "A-transpose", "--max-alleles", "2"]) 
     return pd.read_csv("mat_form_tmp.traw", sep = "\t", index_col="SNP")
 
 def getPatientIDs(snp_matrix):
@@ -150,21 +151,20 @@ if __name__ == '__main__':
 
     parser = argparse.ArgumentParser(description = "Basic tools for calculating rudimentary Polygenic Risk Scores (PRSs). This uses PLINK bed/bim/fam files and GWAS summary stats as standard inputs. Please use PLINK 2, and ensure that there are no multi-allelic SNPs")
     parser.add_argument("-snps", "--plink_snps", help = "Plink file handle for actual SNP data (omit the .extension portion)")
-    parser.add_argument("-ss", "--sum_stats", help = "Path to summary stats file. Be sure to specify format if its not DEFAULT. Assumes tab delimited")
+    parser.add_argument("-ss", "--sum_stats", help = "Path to summary stats file. Be sure to specify format if its not DEFAULT. Assumes tab delimited", required = True)
     parser.add_argument("--ss_format", help = "Format of the summary statistics", default = "SAIGE", choices = ["DEFAULT", "SAIGE"])
     parser.add_argument("-p", "--pval", default = 5e-8, type = float, help = "Specify what pvalue threshold to use.")
     parser.add_argument("--pvals", help= "Use this if you wish to specify multiple at once, in a list separated by commas")
     parser.add_argument("--maf", default = 0.01, type = float, help = "Specify what MAF cutoff to use.")
     parser.add_argument("-o", "--output", default = "./prs_" + str(date.today()), help = "Specify where you would like the output file to be written and its prefix.")
-    parser.add_argument("--train", action = "store_true", help = "Select this if training a PRS model. This will save a list of the SNPs we include in the test, and can also draw some plots (?)")
-
+    parser.add_argument("--no_ambig", default = False, action = "store_true", help = "Specify this option if you have already filter for ambiguous SNPs and bi-alleleic variants. Recommended for speed.")
     args = parser.parse_args()
     pvals = args.pval
     if args.pvals:
         pvals = [float(x) for x in (args.pvals).split(",")]
         
     print("Loading summary statistics and relevant genotype information....")
-    stats, header = loadSummaryStats(args.sum_stats, args.ss_format)
+    stats, header = loadSummaryStats(args.sum_stats, args.ss_format, args.no_ambig)
     variants = loadGenoVars(args.plink_snps + ".pvar")
     print("Filtering SNPs...")
     for pval in pvals:
