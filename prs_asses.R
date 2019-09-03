@@ -7,7 +7,7 @@ suppressMessages(library(dplyr))
 suppressMessages(library(Xmisc))
 suppressMessages(library(rms))
 suppressMessages(library(ggplot2))
-
+source("/work-zfs/abattle4/ashton/prs_dev/prs_tools/liability_pseudoR2.R")
 parser <- ArgumentParser$new()
 parser$add_description("R script for generating figures associated with PRS results and their phenotypes. Currently (8/26) creates a histogram and a scatter plot, with points labelled by case/control disease condition.")
 parser$add_argument("--prs_results", type = 'character', help = "Prefix to the files with PRS scores, listed in a .tsv by ID and score", default = "/work-zfs/abattle4/ashton/prs_dev/scratch/calc_prs_testing/beta_results_test.tsv")
@@ -17,12 +17,26 @@ parser$add_argument('--help',type='logical',action='store_true',help='Print the 
 parser$helpme()
 args <- parser$get_args()
 
+#A function to plot the correlation bar plots
+
+plotCorr <- function(dat, output, style_name)
+{
+    dat$pval_names <- as.numeric(as.character(dat$pval_names))
+    dat <- dat[order(dat$pval_names),]
+    dat$pval_names <- as.factor(dat$pval_names)
+    ggplot(dat, aes(pval_names, nagel_r)) + geom_bar(stat = "identity") + labs(x="P-value threshold", y = paste("R2",style_name))
+    ggsave(filename = paste0(output, "bar_plot.",style_name, ".png"))    
+}
+
+
 
 '%ni%' <- Negate('%in%')
 
 #get the files we are looking at
 fl <- Sys.glob(paste0(args$prs_results,"*.tsv"))
 nagel_r <-c()
+probit_liability <- c()
+corr_liability <- c()
 pval_names <- c()
 phenos <- read_tsv(args$pheno) %>% rename(ID = IID)
 
@@ -38,16 +52,17 @@ for (f in fl)
     #ggsave(filename = paste0(args$output,substr(filename, 1, nchar(f)-4), ".dotplot.png"))
     
     #Calculate Nagelkerke R
-    lm <- lrm(MI_pred$MI ~ MI_pred$Score)
-    nagel_r <- c(nagel_r, lm$stats[10])
+    nagel_r <- c(nagel_r, R2ObservedNagelkerke(MI_pred$MI,MI_pred$Score))
+    probit_liability <- c(probit_liability, R2LiabilityProbit(MI_pred$MI,MI_pred$Score))
+    #Still not implemented....
+    #corr_liability <- c(corr_liability, R2ObservedNagelkerke(MI_pred$MI,MI_pred$Score))
+    
     pval_names <- c(pval_names, str_extract(f, "[01]\\.*[\\-e\\d]+"))
     print(paste("Completed review for", f)) 
 }
 #Do that for each individually. Now get the
 dat <- data.frame(pval_names, nagel_r)
-dat$pval_names <- as.numeric(as.character(dat$pval_names))
-dat <- dat[order(dat$pval_names),]
-dat$pval_names <- as.factor(dat$pval_names)
-print(dat)
-ggplot(dat, aes(pval_names, nagel_r)) + geom_bar(stat = "identity") + labs(x="P-value threshold", y = "R2 (Nagelkerke)")
-ggsave(filename = paste0(args$ouput, "bar_plot.png"))
+plotCorr(dat, args$output, "Nagelkerke")
+dat <- data.frame(pval_names, probit_liability)
+plotCorr(dat, args$output, "Liability (Probit)")
+
