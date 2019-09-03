@@ -32,12 +32,21 @@ def getStatHeaders(setting):
         
 def loadSummaryStats(sum_path, sum_format, no_ambig):
     h = getStatHeaders(sum_format)
+    #Make sure the delimiter is correct!
+    fline=open(sum_path).readline().rstrip()
+    t = fline.split('\t')
+    if len(t) <= 1:
+        print("We suspect the delimiter in your summary stats file is not a tab but something else. Please check and correct.")
+        sys.exit()
+    
     ss = pd.read_csv(sum_path, sep = '\t', index_col = False, 
                      dtype= { h[CHR]:'category', h[POS]:'int64', h[ALT]: 'category', h[REF]:'category', h[BETA]:'float64', h[PVAL]:'float64'})
     ss[REFID] = ss[h[CHR]].astype(str) + ":" + ss[h[POS]].astype(str)
     #Remove ambiguous SNPs
     if not no_ambig:
-        ss = ss.query((ALT != 'A' & REF != 'T') & (ALT != 'T' & REF != 'A') & (ALT != 'G' & REF != 'C') & (ALT != 'C' & REF != 'G'))
+        print("Please make sure ambiguous alleles are removed. Program will terminate")
+        sys.exit()
+        #ss = ss.query((ALT != 'A' and REF != 'T') & (ALT != 'T' & REF != 'A') & (ALT != 'G' & REF != 'C') & (ALT != 'C' & REF != 'G'))
         #Note: these are ambiguous because in a comparison to another dataset its unclear if A is T visa versa, so including these cases with complementary ALT and REF alleles is ambiguous.
     return ss, h
 
@@ -77,50 +86,13 @@ def sameAlleleAssesment(s1, s2):
 
 
 #TODO: This is slow, probably because of the sorting. Come up with a way to maintain order and speed.
+#Checked functionality theoretically, seems to work.
 def getIntersectingData(ss, vars):
     id_keep = ss[REFID]
-    vars_ids = vars[REFID].sort_values()
     #select out the values in vars that are in the vars_keep list (make sure IN ORDER)
     vars_keep = vars[vars[REFID].isin(id_keep)].sort_values(by=REFID) #Remember, if its a 3 we ignore it- it means the data isn't available for them.
     return ss[ss[REFID].isin(vars_keep[REFID])].sort_values(by=REFID), vars_keep 
-"""
-Not using this like I thought I was
-def qualityControl(ss, geno_mat):
 
-    
-    Get the data after past quality control. Specifically checking for
-    1) Ambiguous SNPs (done earlier)
-    2) SNPs that need flipping.
-
-    #Make sure everything is in the right order
-    id_list = ss[REFID].values
-    snp_matrix = geno_mat.loc[id_list]
-
-    alt_same =  sameAlleleAssesment(ss[ALT].values, snp_matrix[ALT].values)
-    ref_same = sameAlleleAssesment(ss[REF].values, snp_matrix[REF].values)
-    #If they are the same, move on.
-    if alt_same and ref_same:
-            return True
-    else:
-        print("More advanced filtering engaged...")
-        complements = dict{'A':'T', 'T':'A', 'C':'G', 'G':'C'}
-
-        #Find where they are different
-        diffs_ss = ss.loc[(ss[ALT].values != np_matrix[ALT].values)]
-        diffs_snp = snp_matrix.loc[diffs_ss.index]
-        for i in range(0, len(diff_ss)):
-            ss_ = str(diffs_ss.iloc[i][ALT].value)
-            snp_ = str(diffs_snp.iloc[i][ALT].value)
-            #If they are ambiguous:
-            if complements[ss_] == snp_:
-                #omit this one from the list
-            elif complements[ss_] != snp_ and 
-
-        #If they are ambiguous, omit them
-        #If they 
-        
-    #If there are ambiguous SNPs (i.e. C in one and G in the other, or A in one and T in the other)
-"""
 def plinkToMatrix(snp_keep, args):
     #Write out the list of SNPs to keep
     snp_order = list(snp_keep.values)
@@ -128,7 +100,10 @@ def plinkToMatrix(snp_keep, args):
     #Make the new matrix
     from subprocess import call 
     call(["plink2", "--pfile", args, "--not-chr", "X", "--extract", list_dir, "--out", "mat_form_tmp", "--export", "A-transpose", "--max-alleles", "2"]) 
-    return pd.read_csv("mat_form_tmp.traw", sep = "\t", index_col="SNP")
+    
+    ret = pd.read_csv("mat_form_tmp.traw", sep = "\t", index_col="SNP")
+    ret.rename(columns={"COUNTED":REF}, inplace=True)
+    return ret
 
 def getPatientIDs(snp_matrix):
     tnames = list(snp_matrix.columns)[5:]
@@ -159,7 +134,7 @@ if __name__ == '__main__':
     parser.add_argument("-o", "--output", default = "./prs_" + str(date.today()), help = "Specify where you would like the output file to be written and its prefix.")
     parser.add_argument("--no_ambig", default = False, action = "store_true", help = "Specify this option if you have already filter for ambiguous SNPs and bi-alleleic variants. Recommended for speed.")
     args = parser.parse_args()
-    pvals = args.pval
+    pvals = [args.pval]
     if args.pvals:
         pvals = [float(x) for x in (args.pvals).split(",")]
         
@@ -168,7 +143,7 @@ if __name__ == '__main__':
     variants = loadGenoVars(args.plink_snps + ".pvar")
     print("Filtering SNPs...")
     for pval in pvals:
-        snp_list, stats_filtered, variants_filtered = filterSNPs(pval, args.maf, stats, variants, header) #TODO: makes sure the variatns are in order.
+        snp_list, stats_filtered, variants_filtered = filterSNPs(pval, args.maf, stats, variants, header) #TODO: makes sure the variants are in order.
         #Run plink filtering on the bed file, and then load it into memory
         print("Building a PLINK matrix for pval", str(pval), "...")
         snp_matrix = plinkToMatrix(snp_list, args.plink_snps)
