@@ -51,7 +51,10 @@ def loadSummaryStats(sum_path, sum_format, no_ambig):
     return ss, h
 
 def loadGenoVars(snp_file):
-    bim_file = pd.read_csv(snp_file, sep = '\t', header = None, names = [CHR, POS, REFID, REF, ALT], dtype={CHR:'category', REFID:'str', POS:'int32', ALT: 'category', REF:'category'}, skiprows = list(range(0,24))) 
+    ##CHROM  POS     ID      REF     ALT     FILTER  INFO
+    bim_file = pd.read_csv(snp_file, sep = '\t', header = None, names = [CHR, POS, REFID, REF, ALT], dtype={CHR:'category', REFID:'str', POS:'int32', ALT: 'category', REF:'category'}, comment="#") 
+    #its not just 24
+    #bim_file = pd.read_csv(snp_file, sep = '\t', header = None, names = [CHR, POS, REFID, REF, ALT], dtype={CHR:'category', REFID:'str', POS:'int32', ALT: 'category', REF:'category'}, skiprows = list(range(0,24))) 
     return bim_file
 
     #Speed up the read in by specifying the type
