@@ -18,6 +18,8 @@ REFID = "ref_id"
 EFFAL = "effect_allele"
 EFFALFREQ = "effect_allele_freq"
 BETA = "beta"
+SEBETA="sebeta"
+TSTAT = "tstat"
 PVAL = "pval"
 REF= "REF" #reference allele
 ALT = "ALT" #Alternate allele
@@ -28,41 +30,48 @@ def getStatHeaders(setting):
         return {CHR: hl[0], POS:hl[1], REFID: hl[2], EFFAL: hl[4], EFFALFREQ:hl[6], BETA:hl[9], PVAL:hl[12], ALT:hl[4], REF:hl[3]}
         #Can certainly add more later, but this is a fine start.
         
-        
-        
-def loadSummaryStats(sum_path, sum_format, no_ambig):
-    h = getStatHeaders(sum_format)
-    #Make sure the delimiter is correct!
-    fline=open(sum_path).readline().rstrip()
-    t = fline.split('\t')
-    if len(t) <= 1:
-        print("We suspect the delimiter in your summary stats file is not a tab but something else. Please check and correct.")
-        sys.exit()
-    ss = dask.dataframe.read_csv(sum_path, sep = '\t', dtype= { h[CHR]:'category', h[POS]:'int64', h[ALT]: 'category', h[REF]:'category', h[BETA]:'float64', h[PVAL]:'float64'})
-    #ss = pd.read_csv(sum_path, sep = '\t', index_col = False, 
-                     #dtype= { h[CHR]:'category', h[POS]:'int64', h[ALT]: 'category', h[REF]:'category', h[BETA]:'float64', h[PVAL]:'float64'})
-    
-    ss[REFID] = ss[h[CHR]].astype(str) + ":" + ss[h[POS]].astype(str)
-    #Remove ambiguous SNPs
-    if not no_ambig:
-        print("Please make sure ambiguous alleles are removed. Program will terminate")
-        sys.exit()
-        #ss = ss.query((ALT != 'A' and REF != 'T') & (ALT != 'T' & REF != 'A') & (ALT != 'G' & REF != 'C') & (ALT != 'C' & REF != 'G'))
-        #Note: these are ambiguous because in a comparison to another dataset its unclear if A is T visa versa, so including these cases with complementary ALT and REF alleles is ambiguous.
-    return ss.set_index[REFID], h #This last step, setting the index, is costly. Should optimize on multiple cores if available though.
+def readInCol(fin):
+    ret_list = list()
+    with open(fin, 'r') as istream:
+        for line in istream:
+            line = line.strip()
+            ret_list.append(line)
+    return ret_list
 
-def loadGenoVars(snp_file):
-    #It appears the headers aren't consistent across files.....
-    ##CHROM  POS     ID      REF     ALT     FILTER  INFO
-    bim_file = pd.read_csv(snp_file, sep = '\t', header = None, names = [CHR, POS, REFID, REF, ALT], dtype={CHR:'category', REFID:'str', POS:'int32', ALT: 'category', REF:'category'}, comment="#", usecols=[0,1,2,3,4], index_col=REFID) #added in the update to have an index column #we only want the first few columns. I assume they are the same
-    #its not just 24
-    #bim_file = pd.read_csv(snp_file, sep = '\t', header = None, names = [CHR, POS, REFID, REF, ALT], dtype={CHR:'category', REFID:'str', POS:'int32', ALT: 'category', REF:'category'}, skiprows = list(range(0,24))) 
-    return bim_file
+def readInSummaryStats(s_path, ids_path):
+    ss = dask.dataframe.read_csv(s_path, sep = ' ', header = None,  names = [REFID, REF,ALT, BETA,SEBETA,TSTAT, PVAL]] dtype= { REF:'category',ALT: 'category', BETA:'float64', PVAL:'float64', SEBETA:'float64', TSTAT:'float64'})
+    return ss, readInCol(ids_path)
 
-    #Speed up the read in by specifying the type
-    #Omit the first 23 lines- they are header information
-    #Saves TONS of memory
-    return bim_file
+        
+def prepSummaryStats(sum_path, geno_ids,pval_thresh):
+    """
+    This function uses awk to filter the summary stats by pvalue, and then reads them into a dask data structure.
+    """
+    #If the id is in the geno_ids file, and it passes the p-value threshold, keep it
+    all(["awk", "'FNR==NR{a[$1];next} ($1 in a && $7 <=", str(pval_thresh), "{ print $0}'", geno_ids, sum_path, ">", "ss.tmp"])
+    all(["cut", "-f", "1", "-d","' '", "ss.tmp", ">", "ss_ids.tmp"]) #This gives the order of all the ids.
+    return "ss.tmp", "ss_ids.tmp"
+
+#This will extract the ids we want to be working with.
+def prepSNPIDs(snp_file, ss_file, ss_type, ambig):
+    """
+    This extracts all the IDs from the genotype data (pvar file) that we wish to be using and selects just the data from the summary stats data we want
+    @return path to the genotype ids
+    @return path to the summary stats.
+    """
+    if not args.ambig:
+        print("Please remove ambiguous snps. program will terminate")
+        sys.exit()
+
+    #Remove all the header lines, just get what we need.
+    call(["awk", "'!/##|ID/ {print $3 } '", (snp_file + ".pvar"), ">", "geno_ids.f"])
+    if ss_type == "SAIGE":
+        call(["awk", """'(FNR == 1) {next;} {print $1":"$2, $4,$5,$10,$11,$12,$13}'""",ss_file, ">", "ss_filt.f"]) #TODO: find ways to speed up this step and downstream ones, maybe filter out X chrom?
+    else:
+        print("The type of ss file hasn't been specified. Please specify this.")
+
+    return "geno_ids.f", "ss_filt.f"
+
 
 def filterSNPs(pval, maf, ss, vars, h):
     #@param h is the header data.
@@ -78,24 +87,25 @@ def calculatePRS(ss, geno_mat):
     #Assuming the alt are the affect alleles.. that is what we assume. Was true in the small number of cases I looked at.
     #Check all the values are correct....
     #The orders should match... but IDK
-    assert(sameAlleleAssesment(ss[ALT].values, snp_matrix[ALT].values))
+    assert(sameAlleleAssesment(ss[ALT], snp_matrix[ALT]))
     print("Same alt alleles!")
     assert(sameAlleleAssesment(ss[REF].values, snp_matrix[REF].values))
     print("Same REF alleles!")
     #get the ALT column of the SNP matrix and make sure it matches with the alleles for which we have effects.
-    dat = (2-snp_matrix.iloc[:,5:]).values
-    dat = (2-snp_matrix.iloc[:,5:]).values
-    betas = stats_filtered[BETA].values
+    #okay, I need to look at this interactively >_<
+    dat = (2-snp_matrix.iloc[:,5:])
+    betas = stats_filtered[BETA] #With dask we use something different....
     scores = np.matmul(betas, dat)
     return scores
 
 def sameAlleleAssesment(s1, s2):
-    if len(s1) > 1 and len(s2) > 2:
-        return (s1 == s2).all
+    t = (s1 != s2)
+    if t == 0:
+        return True
     else:
         print(s1, s2)
         print("^Unusual case")
-        return s1 == s2
+        return False
 
 
 #TODO: This is slow, probably because of the sorting. Come up with a way to maintain order and speed.
@@ -116,15 +126,18 @@ def getIntersectingData(ss, vars):
     return ss_filt, vars_keep
     
 def plinkToMatrix(snp_keep, args):
+    """
+    @param snp_keep is the path to the file with the SNP list. Currently just a single column, TODO check if this will work for plink filtering.
+    """
     #Write out the list of SNPs to keep
-    snp_order = list(snp_keep.values)
-    list_dir = writeSNPIDs(snp_keep)
+    snp_order = snp_keep
+    #list_dir = writeSNPIDs(snp_keep)
     #Make the new matrix
     from subprocess import call 
-    call(["plink2", "--pfile", args, "--not-chr", "X", "--extract", list_dir, "--out", "mat_form_tmp", "--export", "A-transpose", "--max-alleles", "2"]) 
-    
-    ret = pd.read_csv("mat_form_tmp.traw", sep = "\t", index_col="SNP")
-    ret.rename(columns={"COUNTED":REF}, inplace=True)
+    call(["plink2", "--pfile", args, "--not-chr", "X", "--extract", snp_keep, "--out", "mat_form_tmp", "--export", "A-transpose", "--max-alleles", "2"]) 
+    ret = dask.dataframe.read_csv("mat_form_tmp.traw", sep = "\t") #Changed this to a dask, let's see if its faster...
+    ret = ret.set_index("SNP")
+    ret = ret.rename(columns={"COUNTED":REF})
     return ret
 
 def getPatientIDs(snp_matrix):
@@ -157,18 +170,22 @@ if __name__ == '__main__':
     parser.add_argument("--no_ambig", default = False, action = "store_true", help = "Specify this option if you have already filter for ambiguous SNPs and bi-alleleic variants. Recommended for speed.")
     args = parser.parse_args()
     pvals = [args.pval]
+
     if args.pvals:
         pvals = [float(x) for x in (args.pvals).split(",")]
         
-    print("Loading summary statistics and relevant genotype information....")
-    stats, header = loadSummaryStats(args.sum_stats, args.ss_format, args.no_ambig)
-    variants = loadGenoVars(args.plink_snps + ".pvar")
+    print("Selecting IDs for analysis...")
+    geno_ids, ss_parse = prepSNPIDs(args.plink_snps, args.sum_stats, args.no_ambig)
     print("Filtering SNPs...")
     for pval in pvals:
-        snp_list, stats_filtered, variants_filtered = filterSNPs(pval, args.maf, stats, variants, header)
+        stats_file, ids_file = prepSummaryStats(geno_ids, ss_parse, pval) #Gives a list of ids in order and the summary stats
+        print("Reading filtered data into memory")
+        stats_filtered, snp_list = readInSummaryStats(stats,ids)
+        #stats_filtered is our ss dask, snp_list is our ids in memory
+        #snp_list, stats_filtered, variants_filtered = filterSNPs(pval, args.maf, stats, variants, header)
         #Run plink filtering on the bed file, and then load it into memory
         print("Building a PLINK matrix for pval", str(pval), "...")
-        snp_matrix = plinkToMatrix(snp_list, args.plink_snps)
+        snp_matrix = plinkToMatrix(ids_file, args.plink_snps) #Already written to file, so can use this...
         #stats was output of filterSNPs
         print("Calculating PRSs")
         #stats_qc, snp_qc = qualityControl(stats_filtered, snp_matrix)
