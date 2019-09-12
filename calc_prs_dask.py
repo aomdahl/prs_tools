@@ -11,6 +11,9 @@ import pandas as pd
 from datetime import date
 import sys
 import dask.dataframe
+from subprocess import call 
+import os
+
 #General reference things
 CHR = "chr"
 POS = "pos"
@@ -39,17 +42,22 @@ def readInCol(fin):
     return ret_list
 
 def readInSummaryStats(s_path, ids_path):
-    ss = dask.dataframe.read_csv(s_path, sep = ' ', header = None,  names = [REFID, REF,ALT, BETA,SEBETA,TSTAT, PVAL]] dtype= { REF:'category',ALT: 'category', BETA:'float64', PVAL:'float64', SEBETA:'float64', TSTAT:'float64'})
+    ss = dask.dataframe.read_csv(s_path, sep = ' ', header = None,  names = [REFID, REF,ALT, BETA,SEBETA,TSTAT, PVAL], dtype= { REF:'category',ALT: 'category', BETA:'float64', PVAL:'float64', SEBETA:'float64', TSTAT:'float64'})
+    print("Data in dask...")
     return ss, readInCol(ids_path)
 
         
-def prepSummaryStats(sum_path, geno_ids,pval_thresh):
+def prepSummaryStats(geno_ids, sum_path, pval_thresh):
     """
     This function uses awk to filter the summary stats by pvalue, and then reads them into a dask data structure.
     """
     #If the id is in the geno_ids file, and it passes the p-value threshold, keep it
-    all(["awk", "'FNR==NR{a[$1];next} ($1 in a && $7 <=", str(pval_thresh), "{ print $0}'", geno_ids, sum_path, ">", "ss.tmp"])
-    all(["cut", "-f", "1", "-d","' '", "ss.tmp", ">", "ss_ids.tmp"]) #This gives the order of all the ids.
+    command = "awk '(FNR == NR) {a[$1];next} ($1 in a && $7 <= " + str(pval_thresh) + ") {print $0}' " + geno_ids + " " + sum_path + " > ss.tmp"
+    call(command, shell = True) 
+    #call(["awk", "'FNR==NR{a[$1];next} ($1 in a && $7 <=", str(pval_thresh), "{ print $0}'", geno_ids, sum_path, ">", "ss.tmp"])
+    command = "cut -f 1 -d ' ' ss.tmp > ss_ids.tmp"
+    call(command, shell = True)
+   # call(["cut", "-f", "1", "-d","' '", "ss.tmp", ">", "ss_ids.tmp"]) #This gives the order of all the ids.
     return "ss.tmp", "ss_ids.tmp"
 
 #This will extract the ids we want to be working with.
@@ -59,16 +67,22 @@ def prepSNPIDs(snp_file, ss_file, ss_type, ambig):
     @return path to the genotype ids
     @return path to the summary stats.
     """
-    if not args.ambig:
+    if not ambig:
         print("Please remove ambiguous snps. program will terminate")
         sys.exit()
 
     #Remove all the header lines, just get what we need.
-    call(["awk", "'!/##|ID/ {print $3 } '", (snp_file + ".pvar"), ">", "geno_ids.f"])
-    if ss_type == "SAIGE":
-        call(["awk", """'(FNR == 1) {next;} {print $1":"$2, $4,$5,$10,$11,$12,$13}'""",ss_file, ">", "ss_filt.f"]) #TODO: find ways to speed up this step and downstream ones, maybe filter out X chrom?
-    else:
-        print("The type of ss file hasn't been specified. Please specify this.")
+    if not os.path.isfile('geno_ids.f'):
+        command = "awk '(!/##|ID/ && substr($3,1,2) !~ /X:/) {print $3 }' " + snp_file + ".pvar > geno_ids.f"
+        call(command, shell = True)
+    #call(["awk", "'!/##|ID/ {print $3 } '", (snp_file + ".pvar"), ">", "geno_ids.f"])
+    if not os.path.isfile("ss_filt.f"):
+        if ss_type == "SAIGE":
+            command = '''awk '(FNR == 1) {next;} {print $1":"$2, $4,$5,$10,$11,$12,$13}' ''' + ss_file + " > ss_filt.f"
+            call(command, shell = True)
+            #call(["awk", """'(FNR == 1) {next;} {print $1":"$2, $4,$5,$10,$11,$12,$13}'""",ss_file, ">", "ss_filt.f"]) #TODO: find ways to speed up this step and downstream ones, maybe filter out X chrom?
+        else:
+            print("The type of ss file hasn't been specified. Please specify this.")
 
     return "geno_ids.f", "ss_filt.f"
 
@@ -77,29 +91,26 @@ def filterSNPs(pval, maf, ss, vars, h):
     #@param h is the header data.
     #Get list of intersecting SNPs that pass the p-value threshold. Can add the MAF threshold at a later time.
     ss_new, vars_new = getIntersectingData(ss[(ss[h[PVAL]] <= pval) & (ss[h[CHR]] != "X")], vars)
-    retrun ss_new.index, ss_new, vars_new
+    return ss_new.index, ss_new, vars_new
     #return ss_new[REFID], ss_new, vars_new
 
-def calculatePRS(ss, geno_mat):
-    #id_list = ss[REFID].values #just the index
-    #snp_matrix = geno_mat.loc[id_list]
-    #do the necessary math: choose all the right rows.
-    #Assuming the alt are the affect alleles.. that is what we assume. Was true in the small number of cases I looked at.
-    #Check all the values are correct....
-    #The orders should match... but IDK
-    assert(sameAlleleAssesment(ss[ALT], snp_matrix[ALT]))
-    print("Same alt alleles!")
-    assert(sameAlleleAssesment(ss[REF].values, snp_matrix[REF].values))
-    print("Same REF alleles!")
+def calculatePRS(ss, snp_matrix, snp_list):
+    #check = ss.set_index(REFID)
+    #The above step isn't really necessary either, everything should be in order?
+    #assert(sameAlleleAssesment(check[ALT], snp_matrix[ALT]))
+    #print("Same alt alleles!")
+    #assert(sameAlleleAssesment(check[REF], snp_matrix[REF]))
+    #print("Same REF alleles!")
     #get the ALT column of the SNP matrix and make sure it matches with the alleles for which we have effects.
     #okay, I need to look at this interactively >_<
-    dat = (2-snp_matrix.iloc[:,5:])
-    betas = stats_filtered[BETA] #With dask we use something different....
+    dat = (2-snp_matrix.iloc[:,6:])
+    #dat = (2-snp_matrix.loc[:,snp_list]) #this should yield an n x m array, n patients by m snps
+    betas = ss[BETA] #Select the    Betas, should be a list of length m
     scores = np.matmul(betas, dat)
     return scores
 
 def sameAlleleAssesment(s1, s2):
-    t = (s1 != s2)
+    t = (s1 != s2).sum()
     if t == 0:
         return True
     else:
@@ -133,15 +144,20 @@ def plinkToMatrix(snp_keep, args):
     snp_order = snp_keep
     #list_dir = writeSNPIDs(snp_keep)
     #Make the new matrix
-    from subprocess import call 
+    #call(["plink2", "--pfile", args, "--not-chr", "X", "--extract", snp_keep, "--out", "mat_form_tmp", "--export", "A","'include-alt'", "--max-alleles", "2"]) 
+    
     call(["plink2", "--pfile", args, "--not-chr", "X", "--extract", snp_keep, "--out", "mat_form_tmp", "--export", "A-transpose", "--max-alleles", "2"]) 
+    #print("Cleaning up header")
+    #clean_header= "sed -i '1 s/\([1-22]:[0-9]*\)_[ATCGN](\/[ATGCN])/\1/g' mat_form_tmp.raw"
+    #call(clean_header, shell = True)
     ret = dask.dataframe.read_csv("mat_form_tmp.traw", sep = "\t") #Changed this to a dask, let's see if its faster...
-    ret = ret.set_index("SNP")
+    #No need to set an index- everything is in order!
+    #ret = ret.set_index("SNP")
     ret = ret.rename(columns={"COUNTED":REF})
     return ret
 
 def getPatientIDs(snp_matrix):
-    tnames = list(snp_matrix.columns)[5:]
+    tnames = list(snp_matrix.columns)[6:]
     return [int(i.split("_")[0]) for i in tnames]
 
 
@@ -175,12 +191,12 @@ if __name__ == '__main__':
         pvals = [float(x) for x in (args.pvals).split(",")]
         
     print("Selecting IDs for analysis...")
-    geno_ids, ss_parse = prepSNPIDs(args.plink_snps, args.sum_stats, args.no_ambig)
-    print("Filtering SNPs...")
+    geno_ids, ss_parse = prepSNPIDs(args.plink_snps, args.sum_stats,args.ss_format, args.no_ambig)
     for pval in pvals:
+        print("For", str(pval), "threshold, selecting relevant SNP IDs") #The best thing to do up front would be to assign each SNP to a category based on the P-value thresholds it passes.... this owuld be much faster overall
         stats_file, ids_file = prepSummaryStats(geno_ids, ss_parse, pval) #Gives a list of ids in order and the summary stats
         print("Reading filtered data into memory")
-        stats_filtered, snp_list = readInSummaryStats(stats,ids)
+        stats_filtered, snp_list = readInSummaryStats(stats_file,ids_file)
         #stats_filtered is our ss dask, snp_list is our ids in memory
         #snp_list, stats_filtered, variants_filtered = filterSNPs(pval, args.maf, stats, variants, header)
         #Run plink filtering on the bed file, and then load it into memory
@@ -189,7 +205,9 @@ if __name__ == '__main__':
         #stats was output of filterSNPs
         print("Calculating PRSs")
         #stats_qc, snp_qc = qualityControl(stats_filtered, snp_matrix)
-        scores = calculatePRS(stats_filtered, snp_matrix)
+        scores = calculatePRS(stats_filtered, snp_matrix, snp_list)
+        print(scores)
+        input()
         patient_ids  = getPatientIDs(snp_matrix)
         writeScores(scores, patient_ids, args.output + "_" + str(pval) + ".tsv")
         #Match SNPs by address and/or reference ID.
