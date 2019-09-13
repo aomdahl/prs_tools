@@ -52,11 +52,16 @@ def prepSummaryStats(geno_ids, sum_path, pval_thresh):
     This function uses awk to filter the summary stats by pvalue, and then reads them into a dask data structure.
     """
     #If the id is in the geno_ids file, and it passes the p-value threshold, keep it
-    command = "awk '(FNR == NR) {a[$1];next} ($1 in a && $7 <= " + str(pval_thresh) + ") {print $0}' " + geno_ids + " " + sum_path + " > ss.tmp"
+    #With the most recent 9/13 update, this is superfluousi
+    #In fact, we should just read this into a dask and call it a day
+    command = "awk '($7 <= " + str(pval_thresh) + ") {print $0}' " + sum_path + " > ss.tmp"
+    #command = '''awk '(FNR == NR) {a[$1];next} ($1":"$3 in a && $7 <= ''' + str(pval_thresh) + ") {print $0}' " + geno_ids + " " + sum_path + " > ss.tmp"
+    #command = "awk '(FNR == NR) {a[$1];next} ($1 in a && $7 <= " + str(pval_thresh) + ") {print $0}' " + geno_ids + " " + sum_path + " > ss.tmp"
     call(command, shell = True) 
     #call(["awk", "'FNR==NR{a[$1];next} ($1 in a && $7 <=", str(pval_thresh), "{ print $0}'", geno_ids, sum_path, ">", "ss.tmp"])
     command = "cut -f 1 -d ' ' ss.tmp > ss_ids.tmp"
     call(command, shell = True)
+    #TODO: determine if the above awk/cut commands are faster than dask filtering + computing the IDs. Or maybe just doing that with pandas.
    # call(["cut", "-f", "1", "-d","' '", "ss.tmp", ">", "ss_ids.tmp"]) #This gives the order of all the ids.
     return "ss.tmp", "ss_ids.tmp"
 
@@ -73,12 +78,15 @@ def prepSNPIDs(snp_file, ss_file, ss_type, ambig):
 
     #Remove all the header lines, just get what we need.
     if not os.path.isfile('geno_ids.f'):
-        command = "awk '(!/##|ID/ && substr($3,1,2) !~ /X:/) {print $3 }' " + snp_file + ".pvar > geno_ids.f"
+        #command = "awk '(!/##|ID/ && substr($3,1,2) !~ /X:/) {print $3 }' " + snp_file + ".pvar > geno_ids.f"
+        command = '''awk '(!/##|ID/ && $1 !~ /X/) {print $3":"$5}' ''' + snp_file + ".pvar > geno_ids.f"
         call(command, shell = True)
     #call(["awk", "'!/##|ID/ {print $3 } '", (snp_file + ".pvar"), ">", "geno_ids.f"])
     if not os.path.isfile("ss_filt.f"):
         if ss_type == "SAIGE":
-            command = '''awk '(FNR == 1) {next;} {print $1":"$2, $4,$5,$10,$11,$12,$13}' ''' + ss_file + " > ss_filt.f"
+            #ID, REF, ALT, BETA, SEBETA, Tstat,, pval
+            command = '''awk '(FNR == NR) {a[$1];next} (FNR == 1 && NR == 2) {next;} ($1":"$2":"$5 in a) {print $1":"$2, $4,$5,$10,$11,$12,$13}' geno_ids.f ''' + ss_file + " > ss_filt.f"
+            #command = '''awk '(FNR == 1) {next;} {print $1":"$2, $4,$5,$10,$11,$12,$13}' ''' + ss_file + " > ss_filt.f"
             call(command, shell = True)
             #call(["awk", """'(FNR == 1) {next;} {print $1":"$2, $4,$5,$10,$11,$12,$13}'""",ss_file, ">", "ss_filt.f"]) #TODO: find ways to speed up this step and downstream ones, maybe filter out X chrom?
         else:
@@ -95,14 +103,6 @@ def filterSNPs(pval, maf, ss, vars, h):
     #return ss_new[REFID], ss_new, vars_new
 
 def calculatePRS(ss, snp_matrix, snp_list):
-    #check = ss.set_index(REFID)
-    #The above step isn't really necessary either, everything should be in order?
-    #assert(sameAlleleAssesment(check[ALT], snp_matrix[ALT]))
-    #print("Same alt alleles!")
-    #assert(sameAlleleAssesment(check[REF], snp_matrix[REF]))
-    #print("Same REF alleles!")
-    #get the ALT column of the SNP matrix and make sure it matches with the alleles for which we have effects.
-    #okay, I need to look at this interactively >_<
     dat = (2-snp_matrix.iloc[:,6:])
     #dat = (2-snp_matrix.loc[:,snp_list]) #this should yield an n x m array, n patients by m snps
     betas = ss[BETA] #Select the    Betas, should be a list of length m
@@ -173,6 +173,25 @@ def writeSNPIDs(ids):
     ids.to_csv("snp_ids.tmp", header = False, index = False, sep = '\t') #(should have 2 columns of the family/infamily ids, which appear to be the same.)
     return "snp_ids.tmp"
 
+def datasetsAlign(snps, ss, snp_list):
+    """
+    Goals is to make sure that everything checks out before calculating PRS. Specifically:
+    Make sure the REF and ALT alleles are the same
+    Make sure that we have the right dimensions.
+    This shouldn't need to be run, but we can include it as needed...
+    """
+    if not sameAlleleAssesment(ss[ALT], snps[ALT]):
+        print("The alternate alleles don't match as we'd expect, please review your data!")
+        return False
+    if not sameAlleleAssesment(ss[REF], snps[REF]):
+        print("The reference alleles don't match as we'd expect, please review your data!")
+        return False
+    return True
+    #print("Same alt alleles!")
+    #assert(sameAlleleAssesment(check[REF], snp_matrix[REF]))
+    #print("Same REF alleles!")
+    
+
 if __name__ == '__main__':
 
     parser = argparse.ArgumentParser(description = "Basic tools for calculating rudimentary Polygenic Risk Scores (PRSs). This uses PLINK bed/bim/fam files and GWAS summary stats as standard inputs. Please use PLINK 2, and ensure that there are no multi-allelic SNPs")
@@ -203,11 +222,12 @@ if __name__ == '__main__':
         print("Building a PLINK matrix for pval", str(pval), "...")
         snp_matrix = plinkToMatrix(ids_file, args.plink_snps) #Already written to file, so can use this...
         #stats was output of filterSNPs
+        print("Checking dimensions and allele references...")
+        assert(datasetsAlign(snp_matrix, stats_filtered, snp_list))
+
         print("Calculating PRSs")
         #stats_qc, snp_qc = qualityControl(stats_filtered, snp_matrix)
         scores = calculatePRS(stats_filtered, snp_matrix, snp_list)
-        print(scores)
-        input()
         patient_ids  = getPatientIDs(snp_matrix)
         writeScores(scores, patient_ids, args.output + "_" + str(pval) + ".tsv")
         #Match SNPs by address and/or reference ID.
