@@ -79,20 +79,25 @@ def prepSNPIDs(snp_file, ss_file, ss_type, ambig):
     #Remove all the header lines, just get what we need.
     if not os.path.isfile('geno_ids.f'):
         #command = "awk '(!/##|ID/ && substr($3,1,2) !~ /X:/) {print $3 }' " + snp_file + ".pvar > geno_ids.f"
-        command = '''awk '(!/##|ID/ && $1 !~ /X/) {print $3":"$5}' ''' + snp_file + ".pvar > geno_ids.f"
+        #Generate your own pvar file and use that, since the IDs are non-unique >_<
+        #Still working on this (below_)
+        
+        command = '''awk '(!/##/ && $1 !~ /X/) {print $1"\t"$2"\t"$3":"$4":"$5"\t"$4"\t"$5}' ''' + snp_file + ".pvar " + " | sed '1 s/ID:REF:ALT/ID/' > local_geno.pvar"
+        #command = '''awk '(!/##|ID/ && $1 !~ /X/) {print $3":"$4":"$5}' ''' + snp_file + ".pvar > geno_ids.f"
         call(command, shell = True)
-    #call(["awk", "'!/##|ID/ {print $3 } '", (snp_file + ".pvar"), ">", "geno_ids.f"])
+        command = "tail -n +2 local_geno.pvar | cut -f 3 > geno_ids.f"
+        call(command, shell = True)
     if not os.path.isfile("ss_filt.f"):
         if ss_type == "SAIGE":
             #ID, REF, ALT, BETA, SEBETA, Tstat,, pval
-            command = '''awk '(FNR == NR) {a[$1];next} (FNR == 1 && NR == 2) {next;} ($1":"$2":"$5 in a) {print $1":"$2, $4,$5,$10,$11,$12,$13}' geno_ids.f ''' + ss_file + " > ss_filt.f"
+            command = '''awk '(FNR == NR) {a[$1];next} (FNR == 1 && NR == 2) {next;} ($1":"$2":"$4":"$5 in a) {print $1":"$2":"$4":"$5, $4,$5,$10,$11,$12,$13}' geno_ids.f ''' + ss_file + " > ss_filt.f"
             #command = '''awk '(FNR == 1) {next;} {print $1":"$2, $4,$5,$10,$11,$12,$13}' ''' + ss_file + " > ss_filt.f"
             call(command, shell = True)
             #call(["awk", """'(FNR == 1) {next;} {print $1":"$2, $4,$5,$10,$11,$12,$13}'""",ss_file, ">", "ss_filt.f"]) #TODO: find ways to speed up this step and downstream ones, maybe filter out X chrom?
         else:
             print("The type of ss file hasn't been specified. Please specify this.")
 
-    return "geno_ids.f", "ss_filt.f"
+    return "local_geno.pvar","geno_ids.f", "ss_filt.f"
 
 
 def filterSNPs(pval, maf, ss, vars, h):
@@ -136,7 +141,7 @@ def getIntersectingData(ss, vars):
     #return ss[ss[REFID].isin(vars_keep[REFID])].sort_values(by=REFID), vars_keep 
     return ss_filt, vars_keep
     
-def plinkToMatrix(snp_keep, args):
+def plinkToMatrix(snp_keep, args, local_pvar):
     """
     @param snp_keep is the path to the file with the SNP list. Currently just a single column, TODO check if this will work for plink filtering.
     """
@@ -145,8 +150,10 @@ def plinkToMatrix(snp_keep, args):
     #list_dir = writeSNPIDs(snp_keep)
     #Make the new matrix
     #call(["plink2", "--pfile", args, "--not-chr", "X", "--extract", snp_keep, "--out", "mat_form_tmp", "--export", "A","'include-alt'", "--max-alleles", "2"]) 
-    
-    call(["plink2", "--pfile", args, "--not-chr", "X", "--extract", snp_keep, "--out", "mat_form_tmp", "--export", "A-transpose", "--max-alleles", "2"]) 
+    #Writing this out to a matrix really is a slow step.... It may be faster to write it out once for everything, and then filter P-values afterwards based on this.
+    #Actually certainly this is faster. UG you turd.
+    call(["plink2", "--pfile", args, "--pvar", local_pvar, "--not-chr", "X", "--extract", snp_keep, "--out", "mat_form_tmp", "--export", "A-transpose", "--max-alleles", "2"]) 
+    #call(["plink2", "--pfile", args, "--not-chr", "X", "--extract", snp_keep, "--out", "mat_form_tmp", "--export", "A-transpose", "--max-alleles", "2"]) 
     #print("Cleaning up header")
     #clean_header= "sed -i '1 s/\([1-22]:[0-9]*\)_[ATCGN](\/[ATGCN])/\1/g' mat_form_tmp.raw"
     #call(clean_header, shell = True)
@@ -210,7 +217,7 @@ if __name__ == '__main__':
         pvals = [float(x) for x in (args.pvals).split(",")]
         
     print("Selecting IDs for analysis...")
-    geno_ids, ss_parse = prepSNPIDs(args.plink_snps, args.sum_stats,args.ss_format, args.no_ambig)
+    local_pvar, geno_ids, ss_parse = prepSNPIDs(args.plink_snps, args.sum_stats,args.ss_format, args.no_ambig)
     for pval in pvals:
         print("For", str(pval), "threshold, selecting relevant SNP IDs") #The best thing to do up front would be to assign each SNP to a category based on the P-value thresholds it passes.... this owuld be much faster overall
         stats_file, ids_file = prepSummaryStats(geno_ids, ss_parse, pval) #Gives a list of ids in order and the summary stats
@@ -220,10 +227,10 @@ if __name__ == '__main__':
         #snp_list, stats_filtered, variants_filtered = filterSNPs(pval, args.maf, stats, variants, header)
         #Run plink filtering on the bed file, and then load it into memory
         print("Building a PLINK matrix for pval", str(pval), "...")
-        snp_matrix = plinkToMatrix(ids_file, args.plink_snps) #Already written to file, so can use this...
+        snp_matrix = plinkToMatrix(ids_file, args.plink_snps, local_pvar) #Already written to file, so can use this...
         #stats was output of filterSNPs
         print("Checking dimensions and allele references...")
-        assert(datasetsAlign(snp_matrix, stats_filtered, snp_list))
+        #assert(datasetsAlign(snp_matrix, stats_filtered, snp_list))
 
         print("Calculating PRSs")
         #stats_qc, snp_qc = qualityControl(stats_filtered, snp_matrix)
