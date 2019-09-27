@@ -41,12 +41,16 @@ def readInSummaryStats(s_path):
     print("Data in memory...")
     ss.info(memory_usage='deep') 
     
-    return ss#, readInCol(ids_path)
+    #return ss.sort_values(by=[REFID])#, readInCol(ids_path)
+    return ss
 
 def filterSumStats(pvals,ss):
     pvals_ref = dict() #dictionary containing a pointer for each p value
     for p in pvals:
+        print("Filtering sum stats, see if we get the right indices")
         samp = ss[(ss[PVAL] <= float(p))]
+        print(samp)
+        print(samp.index.tolist())
         pvals_ref[p] = [samp.index.tolist(), samp[BETA].values] #Get just the pvalues and the indices.
         #print("Scores as extracted from sum stats....")
         #print(pvals_ref[p][0], pvals_ref[p][1])
@@ -75,6 +79,7 @@ def prepSNPIDs(snp_file, ss_file, ss_type, ambig):
     @return path to the genotype ids
     @return path to the summary stats.
     """
+    local_geno = snp_file + ".pvar"
     if not ambig:
         print("Please remove ambiguous snps. program will terminate")
         sys.exit()
@@ -82,32 +87,64 @@ def prepSNPIDs(snp_file, ss_file, ss_type, ambig):
     #Remove all the header lines, just get what we need.
     if not os.path.isfile('geno_ids.f'):
         
-        command = '''awk '(!/##/ && $1) {print $1"\t"$2"\t"$3":"$4":"$5"\t"$4"\t"$5}' ''' + snp_file + ".pvar " + " | sed '1 s/ID:REF:ALT/ID/' > local_geno.pvar"
+        #command = '''awk '(!/##/ && $1) {print $1"\t"$2"\t"$3"\t"$4"\t"$5}' ''' + snp_file + ".pvar  > local_geno.pvar"
+        #Simplifying things, we aren't going to re-write IDs....
+        #command = '''awk '(!/##/ && $1) {print $1"\t"$2"\t"$3":"$4":"$5"\t"$4"\t"$5}' ''' + snp_file + ".pvar " + " | sed '1 s/ID:REF:ALT/ID/' > local_geno.pvar"
         #command = '''awk '(!/##|ID/ && $1 !~ /X/) {print $3":"$4":"$5}' ''' + snp_file + ".pvar > geno_ids.f"
-        call(command, shell = True)
-        command = "tail -n +2 local_geno.pvar | cut -f 3 > geno_ids.f"
-        call(command, shell = True)
+        #call(command, shell = True)
+        command_n = "tail -n +2 " + local_geno + " | cut -f 3 > geno_ids.f"
+        call(command_n, shell = True)
     if not os.path.isfile("ss_filt.f"):
         if ss_type == "SAIGE":
             #ID, REF, ALT, BETA, SEBETA, Tstat,, pval
-            command = '''awk '(FNR == NR) {a[$1];next} (FNR == 1 && NR == 2) {next;} ($1":"$2":"$4":"$5 in a) {print $1":"$2":"$4":"$5, $4,$5,$10,$11,$12,$13}' geno_ids.f ''' + ss_file + " > ss_filt.f"
+            #command = '''awk '(FNR == NR) {a[$1];next} (FNR == 1 && NR == 2) {next;} ($1":"$2":"$4":"$5 in a) {print $1":"$2":"$4":"$5, $4,$5,$10,$11,$12,$13}' geno_ids.f ''' + ss_file + " > ss_filt.f"
+            command = '''awk '(FNR == NR) {a[$1];next} (FNR == 1 && NR == 2) {next;} ($1":"$2 in a) {print $1":"$2, $4,$5,$10,$11,$12,$13}' geno_ids.f ''' + ss_file + " > ss_filt.f"
             #command = '''awk '(FNR == 1) {next;} {print $1":"$2, $4,$5,$10,$11,$12,$13}' ''' + ss_file + " > ss_filt.f"
             call(command, shell = True)
-            
+             
             #reset the ids we use downatream
             command = "cut -f 1 -d ' ' ss_filt.f > geno_ids.f"
             call(command, shell = True)
         else:
             print("The type of ss file hasn't been specified. Please specify this.")
-
-    return "local_geno.pvar","geno_ids.f", "ss_filt.f"
+    return local_geno,"geno_ids.f", "ss_filt.f"
 
 def scoreCalculation(geno, betas):
-    #print("multiplying the following....", geno[:3], betas[:3])
-    #return np.dot(geno[:3], betas[:3])
-    return np.dot(geno, betas)   
+    return np.dot(2- geno, betas)   
 
-def linearGenoParse(snp_matrix, snp_indices,pvals, scores, patient_ids):
+def hashMapBuild(ss_snps, plink_snps, ret_tap):
+    pref = dict()
+    for i in range(0, len(plink_snps)):
+        pref[plink_snps[i][:-2]] = i
+    for j in range(0, len(ss_snps)):
+        curr_id = ss_snps.iloc[j]
+        try:
+            ret_tap[j] = int(pref[curr_id])
+        except KeyError:
+            print("Unable to find a match for ", curr_id)
+            ret_tap[j] = -1
+            #input()
+    return ret_tap
+        
+def buildVarMap(plink_order, ss_order):
+    """
+        Return a numpy array that maps an index in the ss file to a number in plink
+    """
+    ret = np.zeros(len(ss_order), dtype = np.int32)
+    search_count = 0
+    for i in range(0, len(ss_order)):
+        curr_ss = ss_order.iloc[i]
+        map_index = i #assume they are ordered the same
+        if curr_ss != plink_order[i][:-2]: #But if for some reason it isn't a match....
+            #search_count += 1
+            #map_index = plink_order.index(curr_ss)
+            ret = hashMapBuild(ss_order, plink_order, ret)
+            break
+        ret[i] = int(map_index)
+    return ret
+    
+
+def linearGenoParse(snp_matrix, snp_indices,pvals, scores, patient_ids, ss_ids):
     with open(snp_matrix, 'r') as istream:
         counter = 0
         line = istream.readline().strip()
@@ -115,6 +152,9 @@ def linearGenoParse(snp_matrix, snp_indices,pvals, scores, patient_ids):
         #for line in istream:
             line = line.strip()
             if counter == 0:
+                
+                #line = line.replace("_", ":")
+                var_map = buildVarMap(line.split()[6:], ss_ids)
                 line = istream.readline().strip()
                 counter += 1
                 continue
@@ -122,9 +162,9 @@ def linearGenoParse(snp_matrix, snp_indices,pvals, scores, patient_ids):
             patient_ids.append(dat[0])
             dat = dat[6:] #Just the numberic values at the end
             for p in pvals:
-                #print("P value:", p)
-                #print("patient number:", int(patient_ids[-1]))
-                scores[p].append(scoreCalculation(dat[snp_indices[p][INDEX]],snp_indices[p][B]))
+                snp_index = snp_indices[p][INDEX]
+                sel = var_map[snp_index]
+                scores[p].append(scoreCalculation(dat[sel],snp_indices[p][B]))
             counter += 1
             if counter % 100 == 0:
                 print("Currently at patient", counter)
@@ -133,13 +173,13 @@ def linearGenoParse(snp_matrix, snp_indices,pvals, scores, patient_ids):
             #    break
     return scores, patient_ids
 
-def calculatePRS(pvals, snp_matrix, snp_indices):
+def calculatePRS(pvals, snp_matrix, snp_indices, snp_list):
 
     scores = dict() #where the scores get stored
     for p in pvals:
         scores[p] = list()
     patient_ids = list() #store the patient's ids...
-    scores, patient_ids = linearGenoParse(snp_matrix, snp_indices,pvals, scores, patient_ids)
+    scores, patient_ids = linearGenoParse(snp_matrix, snp_indices,pvals, scores, patient_ids, snp_list)
     return scores, patient_ids
 
 def sameAlleleAssesment(s1, s2):
@@ -159,9 +199,14 @@ def plinkToMatrix(snp_keep, args, local_pvar):
     if os.path.isfile("mat_form_tmp.raw"):
         print("Using currently existing genotype matrix...")
     else:
+        #call(["plink2", "--pfile", args, "--not-chr", "X", "--extract", snp_keep, "--out", "mat_form_tmp", "--export", "A", "--max-alleles", "2"]) 
+        
         call(["plink2", "--pfile", args, "--pvar", local_pvar, "--not-chr", "X", "--extract", snp_keep, "--out", "mat_form_tmp", "--export", "A", "--max-alleles", "2"]) 
         print("New plink matrix made!")
         #input()
+        if not os.path.isfile("mat_form_tmp.raw"):
+            print("PLINK file was not correctly created. Program will terminate.")
+            sys.exit()
     return "mat_form_tmp.raw"
 
 def getPatientIDs(snp_matrix):
@@ -234,7 +279,7 @@ if __name__ == '__main__':
     snp_indices = filterSumStats(pvals,stats_complete)
     #Now do it 
     print("Parsing the genotype file...")
-    scores, patient_ids = calculatePRS(pvals, snp_matrix, snp_indices)
+    scores, patient_ids = calculatePRS(pvals, snp_matrix, snp_indices,stats_complete[REFID])
     writeScores(scores, patient_ids, args.output + ".tsv")
     #Match SNPs by address and/or reference ID.
     print("Scores written out to", args.output + ".tsv")
