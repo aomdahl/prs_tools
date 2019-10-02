@@ -49,8 +49,8 @@ def filterSumStats(pvals,ss):
     for p in pvals:
         print("Filtering sum stats, see if we get the right indices")
         samp = ss[(ss[PVAL] <= float(p))]
-        print(samp)
-        print(samp.index.tolist())
+        #print(samp)
+        #print(samp.index.tolist())
         pvals_ref[p] = [samp.index.tolist(), samp[BETA].values] #Get just the pvalues and the indices.
         #print("Scores as extracted from sum stats....")
         #print(pvals_ref[p][0], pvals_ref[p][1])
@@ -73,13 +73,15 @@ def prepSummaryStats(geno_ids, sum_path, pval_thresh):
     return "ss.tmp", "ss_ids.tmp"
 
 #This will extract the ids we want to be working with.
-def prepSNPIDs(snp_file, ss_file, ss_type, ambig):
+def prepSNPIDs(snp_file, ss_file, ss_type, ambig, id_type):
     """
     This extracts all the IDs from the genotype data (pvar file) that we wish to be using and selects just the data from the summary stats data we want
     @return path to the genotype ids
     @return path to the summary stats.
     """
     local_geno = snp_file + ".pvar"
+    if id_type:
+        local_geno = "local_geno.pvar"
     if not ambig:
         print("Please remove ambiguous snps. program will terminate")
         sys.exit()
@@ -89,24 +91,36 @@ def prepSNPIDs(snp_file, ss_file, ss_type, ambig):
         
         #command = '''awk '(!/##/ && $1) {print $1"\t"$2"\t"$3"\t"$4"\t"$5}' ''' + snp_file + ".pvar  > local_geno.pvar"
         #Simplifying things, we aren't going to re-write IDs....
-        #command = '''awk '(!/##/ && $1) {print $1"\t"$2"\t"$3":"$4":"$5"\t"$4"\t"$5}' ''' + snp_file + ".pvar " + " | sed '1 s/ID:REF:ALT/ID/' > local_geno.pvar"
+        if id_type:
+            command = '''awk '(!/##/ && $1) {print $1"\t"$2"\t"$3":"$4":"$5"\t"$4"\t"$5}' ''' + snp_file + ".pvar " + " | sed '1 s/ID:REF:ALT/ID/' > local_geno.pvar"
         #command = '''awk '(!/##|ID/ && $1 !~ /X/) {print $3":"$4":"$5}' ''' + snp_file + ".pvar > geno_ids.f"
-        #call(command, shell = True)
+            call(command, shell = True)
+        
         command_n = "tail -n +2 " + local_geno + " | cut -f 3 > geno_ids.f"
         call(command_n, shell = True)
+    
     if not os.path.isfile("ss_filt.f"):
         if ss_type == "SAIGE":
             #ID, REF, ALT, BETA, SEBETA, Tstat,, pval
             #command = '''awk '(FNR == NR) {a[$1];next} (FNR == 1 && NR == 2) {next;} ($1":"$2":"$4":"$5 in a) {print $1":"$2":"$4":"$5, $4,$5,$10,$11,$12,$13}' geno_ids.f ''' + ss_file + " > ss_filt.f"
             command = '''awk '(FNR == NR) {a[$1];next} (FNR == 1 && NR == 2) {next;} ($1":"$2 in a) {print $1":"$2, $4,$5,$10,$11,$12,$13}' geno_ids.f ''' + ss_file + " > ss_filt.f"
-            #command = '''awk '(FNR == 1) {next;} {print $1":"$2, $4,$5,$10,$11,$12,$13}' ''' + ss_file + " > ss_filt.f"
-            call(command, shell = True)
-             
-            #reset the ids we use downatream
-            command = "cut -f 1 -d ' ' ss_filt.f > geno_ids.f"
-            call(command, shell = True)
+        elif ss_type == "NEAL":
+            print("Nealing it out....")
+            command = '''awk '(FNR == NR) {a[$1];next} (FNR == 1 && NR == 2) {next;} ($1 in a) {print $1, "N",$2,$8,$9,$10,$11}' geno_ids.f ''' + ss_file + " > ss_filt.f"   
+
         else:
             print("The type of ss file hasn't been specified. Please specify this.")
+    
+
+        #command = '''awk '(FNR == 1) {next;} {print $1":"$2, $4,$5,$10,$11,$12,$13}' ''' + ss_file + " > ss_filt.f"
+        call(command, shell = True)
+             
+        #reset the ids we use downatream
+        command = "cut -f 1 -d ' ' ss_filt.f > geno_ids.f"
+        call(command, shell = True)
+    
+    #print("Did this work out right? Sample the files")
+    #input()
     return local_geno,"geno_ids.f", "ss_filt.f"
 
 def scoreCalculation(geno, betas):
@@ -175,9 +189,11 @@ def linearGenoParse(snp_matrix, snp_indices,pvals, scores, patient_ids, ss_ids):
 
 def calculatePRS(pvals, snp_matrix, snp_indices, snp_list):
 
-    scores = dict() #where the scores get stored
-    for p in pvals:
-        scores[p] = list()
+    #scores = dict() #where the scores get stored
+    #for p in pvals:
+    #    scores[p] = list()
+    #Seraj shoutout
+    scores = { p : [] for p in pvals}
     patient_ids = list() #store the patient's ids...
     scores, patient_ids = linearGenoParse(snp_matrix, snp_indices,pvals, scores, patient_ids, snp_list)
     return scores, patient_ids
@@ -216,7 +232,7 @@ def getPatientIDs(snp_matrix):
 
 def writeScores(scores, ids, destination):
     with open(destination, 'w') as ostream:
-        p_string = "ID\t"
+        p_string = "IID\t"
         num = 0
         for p in scores:
             p_string = p_string + str(p) + '\t'
@@ -258,12 +274,13 @@ if __name__ == '__main__':
     parser = argparse.ArgumentParser(description = "Basic tools for calculating rudimentary Polygenic Risk Scores (PRSs). This uses PLINK bed/bim/fam files and GWAS summary stats as standard inputs. Please use PLINK 2, and ensure that there are no multi-allelic SNPs")
     parser.add_argument("-snps", "--plink_snps", help = "Plink file handle for actual SNP data (omit the .extension portion)")
     parser.add_argument("-ss", "--sum_stats", help = "Path to summary stats file. Be sure to specify format if its not DEFAULT. Assumes tab delimited", required = True)
-    parser.add_argument("--ss_format", help = "Format of the summary statistics", default = "SAIGE", choices = ["DEFAULT", "SAIGE"])
+    parser.add_argument("--ss_format", help = "Format of the summary statistics", default = "SAIGE", choices = ["DEFAULT", "SAIGE", "NEAL"])
     parser.add_argument("-p", "--pval", default = 5e-8, type = float, help = "Specify what pvalue threshold to use.")
     parser.add_argument("--pvals", help= "Use this if you wish to specify multiple at once, in a list separated by commas")
     parser.add_argument("--maf", default = 0.01, type = float, help = "Specify what MAF cutoff to use.")
     parser.add_argument("-o", "--output", default = "./prs_" + str(date.today()), help = "Specify where you would like the output file to be written and its prefix.")
     parser.add_argument("--no_ambig", default = False, action = "store_true", help = "Specify this option if you have already filter for ambiguous SNPs and bi-alleleic variants. Recommended for speed.")
+    parser.add_argument("--var_in_id", action = "store_true", help = "Specify this if you wish to use more specific id of the format chr:loc:ref:alt. For default SNP in file, just leave this.")
     args = parser.parse_args()
     pvals = [args.pval]
 
@@ -272,7 +289,7 @@ if __name__ == '__main__':
         pvals = [float(x) for x in (args.pvals).split(",")]
         
     print("Selecting IDs for analysis...")
-    local_pvar, geno_ids, ss_parse = prepSNPIDs(args.plink_snps, args.sum_stats,args.ss_format, args.no_ambig)
+    local_pvar, geno_ids, ss_parse = prepSNPIDs(args.plink_snps, args.sum_stats,args.ss_format, args.no_ambig, args.var_in_id)
     print("Reading data into memory (only done on first pass)")
     stats_complete = readInSummaryStats(ss_parse)
     snp_matrix = plinkToMatrix(geno_ids, args.plink_snps, local_pvar) 
