@@ -2,7 +2,6 @@
 Ashton Omdahl
 August 2019
 """
-#Make sure you are using the NON-PYMOL interpreter.
 import argparse
 import numpy as np
 import scipy as sp
@@ -12,6 +11,7 @@ import sys
 from subprocess import call 
 import os
 import time
+import plinkio
 #General reference things
 CHR = "chr"
 POS = "pos"
@@ -89,14 +89,14 @@ def prepSNPIDs(snp_file, ss_file, ss_type, ambig, id_type):
     #Remove all the header lines, just get what we need.
     if not os.path.isfile('geno_ids.f'):
         
-        #command = '''awk '(!/##/ && $1) {print $1"\t"$2"\t"$3"\t"$4"\t"$5}' ''' + snp_file + ".pvar  > local_geno.pvar"
+        command = '''awk '(!/##/ && $1) {print $1"\t"$2"\t"$3"\t"$4"\t"$5}' ''' + snp_file + ".pvar  > local_geno.pvar"
         #Simplifying things, we aren't going to re-write IDs....
         if id_type:
+            print("ID type")
             command = '''awk '(!/##/ && $1) {print $1"\t"$2"\t"$3":"$4":"$5"\t"$4"\t"$5}' ''' + snp_file + ".pvar " + " | sed '1 s/ID:REF:ALT/ID/' > local_geno.pvar"
         #command = '''awk '(!/##|ID/ && $1 !~ /X/) {print $3":"$4":"$5}' ''' + snp_file + ".pvar > geno_ids.f"
-            call(command, shell = True)
-        
-        command_n = "tail -n +2 " + local_geno + " | cut -f 3 > geno_ids.f"
+        call(command, shell = True)
+        command_n = "tail -n +2 local_geno.pvar | cut -f 3 > geno_ids.f"
         call(command_n, shell = True)
     
     if not os.path.isfile("ss_filt.f"):
@@ -111,7 +111,6 @@ def prepSNPIDs(snp_file, ss_file, ss_type, ambig, id_type):
         else:
             print("The type of ss file hasn't been specified. Please specify this.")
     
-
         #command = '''awk '(FNR == 1) {next;} {print $1":"$2, $4,$5,$10,$11,$12,$13}' ''' + ss_file + " > ss_filt.f"
         call(command, shell = True)
              
@@ -293,6 +292,38 @@ if __name__ == '__main__':
     print("Reading data into memory (only done on first pass)")
     stats_complete = readInSummaryStats(ss_parse)
     snp_matrix = plinkToMatrix(geno_ids, args.plink_snps, local_pvar) 
+
+    #So what we need to do differently:
+        #Let's keep using plink to filter down the SNP list, but save it out as a bed/bim format file. 
+        #assuming that works....
+        #Load it into plinkio
+        #Transpose the file.
+        #Load the transposed one into memory (or just transpose?) Not sure if this will do it.
+        #Then return the plinkf object to iterate.
+        #Iterate through it like the lines of the matrix file, except you aren't reading those in line by line. Hopefully that proves to be faster.
+        #This method has slowdowns in transposing the data. If I could avoid doing that then it wouldn't be an issue.
+        #I guess the boost of going this other directino- not loading everything into memory- is no longer an issue, as plinkio is efficient.
+        #So, make one pass through the plinkio, 
+        #Note- the key xommands to know are just that plinkfile.PlinkFile has an iterator
+        #i.e. line = next(plinkf)
+        #repeat until youve gone through all samples.
+
+
+        #plinkf = plinkfile.PlinkFile("./ref") 
+        # #okay, the transpose call is slower than I'd like, certainly slower than reading in. I think that's because it does a write out, I wonder if this can be overridden. 
+        #Sad news- the transpose function doens't store anything, just writes it out to memory.
+        #Can plink transpose the data for me? hmmmmm
+        #Maybe. It looks like maybe. In that case, what if we use plink to subset our SNPs (although, this isn't the smartest way to do it), then transpose the data, then load it in and iterate it?
+        #This is an option to pursue.
+        #Alternatively, just go through only to the relevant SNPs andg et the info, but that seems wasteful.
+        #So there is something rotated of the file
+
+        #So it doesn't look like plink2 will do the transposition for me. That's weird
+        #So is it better to transpose it use libplinkio or just marse it the way they have?
+        #Or should I rebuild my whole parser?
+
+
+    #snp_matrix_plinkio = plinkioReadIn(args.plink_snps)
     snp_indices = filterSumStats(pvals,stats_complete)
     #Now do it 
     print("Parsing the genotype file...")
