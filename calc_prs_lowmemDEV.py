@@ -97,16 +97,18 @@ def prepSNPIDs(snp_file, ss_file, ss_type, ambig, id_type):
         #command = '''awk '(!/##|ID/ && $1 !~ /X/) {print $3":"$4":"$5}' ''' + snp_file + ".pvar > geno_ids.f"
         call(command, shell = True)
         #command_n = "tail -n +2 local_geno.pvar | awk ' ($1 !~ /X/) {print $1}' |   cut -f 3 > geno_ids.f"
-        command_n = "awk ' (NR> 1 && $1 !~ /X/) {print $3}'  local_geno.pvar > geno_ids.f" #can do this in one awk command too you goon.
+        command_n = "awk ' (NR> 1 && $1 !~ /X/) {print $3}'  local_geno.pvar > geno_ids.f" 
         call(command_n, shell = True)
     
     if not os.path.isfile("ss_filt.f"):
+        #TODO: modify this to read in right off the bat so not filtering so many times!
+        #Maybe I should read it in right off , and then filter at successive stages based on
+        #ss = pd.read_csv(s_path, sep = ' ', header = None,  names = [REFID, REF,ALT, BETA,SEBETA,TSTAT, PVAL], dtype= { REF:'category',ALT: 'category', BETA:'float64', PVAL:'float64', SEBETA:'float64', TSTAT:'float64'})
+
         if ss_type == "SAIGE":
             #ID, REF, ALT, BETA, SEBETA, Tstat,, pval
-            #command = '''awk '(FNR == NR) {a[$1];next} (FNR == 1 && NR == 2) {next;} ($1":"$2":"$4":"$5 in a) {print $1":"$2":"$4":"$5, $4,$5,$10,$11,$12,$13}' geno_ids.f ''' + ss_file + " > ss_filt.f"
             command = '''awk '(FNR == NR) {a[$1];next} (FNR == 1 && NR == 2) {next;} ($1":"$2 in a) {print $1":"$2, $4,$5,$10,$11,$12,$13}' geno_ids.f ''' + ss_file + " > ss_filt.f"
         elif ss_type == "NEAL":
-            print("Nealing it out....")
             command = '''awk '(FNR == NR) {a[$1];next} (FNR == 1 && NR == 2) {next;} ($1 in a) {print $1, "N",$2,$8,$9,$10,$11}' geno_ids.f ''' + ss_file + " > ss_filt.f"   
 
         else:
@@ -115,7 +117,7 @@ def prepSNPIDs(snp_file, ss_file, ss_type, ambig, id_type):
         #command = '''awk '(FNR == 1) {next;} {print $1":"$2, $4,$5,$10,$11,$12,$13}' ''' + ss_file + " > ss_filt.f"
         call(command, shell = True)
              
-        #reset the ids we use downatream
+        #reset the ids we use downstream
         command = "cut -f 1 -d ' ' ss_filt.f > geno_ids.f"
         call(command, shell = True)
 
@@ -200,18 +202,12 @@ def linearGenoParse(snp_matrix, snp_indices,pvals, scores, ss_ids):
         #end_ig = time.time()
         #print("time for itemgettermethod:", str(end_ig - start_ig))
 
-
-
         if i % report_index == 0:
             print("Currently at patient", i + 1, "of", num_patients)
 
     return scores, patient_ids
 
 def calculatePRS(pvals, snp_matrix, snp_indices, snp_list):
-
-    #scores = dict() #where the scores get stored
-    #for p in pvals:
-    #    scores[p] = list()
     #Seraj shoutout
     scores = { p : [] for p in pvals}
     scores, patient_ids = linearGenoParse(snp_matrix, snp_indices,pvals, scores, snp_list)
@@ -242,6 +238,42 @@ def plinkToMatrix(snp_keep, args, local_pvar):
             print("PLINK file was not correctly created. Program will terminate.")
             sys.exit()
     return "mat_form_tmp"
+
+#TODO- you can do this once with the 1000 genomes cohort and then just repeat with that list of "best" genes.
+#Doesn't need to be done denovo every time!
+def plinkClump(reference_ld, clump_ref, geno_ids, ss):
+    """
+    Run plink and clump, get the new list of ids.
+    Select just these from the summary statistics.
+    """
+    if clump_ref == "NA":
+        #Build the file for plink to run on 
+        command = "echo SNP P > clump_ids.tmp"
+        call(command, shell = True) 
+        command = "awk ' {print $1,$NF} ' " + ss + ">> clump_ids.tmp"
+        call(command, shell = True)
+        #Run plink clumping
+        plink_command = "plink --bfile " + reference_ld + "--clump clump_ids.tmp --clump-best"
+        call(plink_command, shell = True)
+        clump_file = "plink.clumped.best"
+    else:
+        print("Using provided reference clump...")
+        clump_file = clump_ref
+    #Refilter summary stats....
+    #Actually, I should be able to just filter the list based on the plink input... buttt then we still have an order issue. Which I guess doesn't matter but.
+    command = "awk '(FNR == NR) {a[$1];next} ($1 in a) {print $0}' " + clump_ref + " " + ss + " > t && mv t " + ss
+    call(command, shell = True)
+    #input("ss list filtered?")
+    #Refilter the geno_id list
+    #print(geno_ids)
+    command = "awk '(FNR == NR) {a[$1];next} ($1 in a) {print $1}' " + clump_ref + " " + geno_ids + " > t && mv t " + geno_ids
+    print(command)
+    #Read in the list
+    call(command, shell = True)
+    #input("geno_ids filtered?")
+    #print("Clumping complete!")
+    return ss, geno_ids
+    
 
 def getPatientIDs(snp_matrix):
     tnames = list(snp_matrix.columns)[6:]
@@ -299,6 +331,9 @@ if __name__ == '__main__':
     parser.add_argument("-o", "--output", default = "./prs_" + str(date.today()), help = "Specify where you would like the output file to be written and its prefix.")
     parser.add_argument("--no_ambig", default = False, action = "store_true", help = "Specify this option if you have already filter for ambiguous SNPs and bi-alleleic variants. Recommended for speed.")
     parser.add_argument("--var_in_id", action = "store_true", help = "Specify this if you wish to use more specific id of the format chr:loc:ref:alt. For default SNP in file, just leave this.")
+    parser.add_argument("--clump", help = "Specify if you wish to do clumping. DEfault threshold is 0.5", action = "store_true", required = "--ld_ref" in sys.argv or "--clump_ref" in sys.argv)
+    parser.add_argument("--ld_ref", help = "Specify an LD reference panel, required if you want to do clumping. Pass in plink1.9 format please.")
+    parser.add_argument("--clump_ref", help = "Specify this option if you wish to perform clumping and already have a plink clump file produced (the output of plink1.9 with the --clump-best argument). Provide the path to this file.", default = "NA")
     args = parser.parse_args()
     pvals = [args.pval]
 
@@ -309,37 +344,14 @@ if __name__ == '__main__':
     print("Selecting IDs for analysis...")
     local_pvar, geno_ids, ss_parse = prepSNPIDs(args.plink_snps, args.sum_stats,args.ss_format, args.no_ambig, args.var_in_id)
     print("Reading data into memory (only done on first pass)")
+    #Selecting out SNPs that are likely in LD
+    #at this point, the geno ids and ss parse list  has what we want. We will reduce it more though through clumping via plink.
+    if args.clump:
+        ss_parse, geno_ids = plinkClump(args.ld_ref, args.clump_ref, geno_ids, ss_parse)
     stats_complete = readInSummaryStats(ss_parse)
+    
+
     snp_matrix = plinkToMatrix(geno_ids, args.plink_snps, local_pvar) 
-
-    #So what we need to do differently:
-        #Let's keep using plink to filter down the SNP list, but save it out as a bed/bim format file. 
-        #assuming that works....
-        #Load it into plinkio\
-        #Load the transposed one into memory (or just transpose?) Not sure if this will do it.
-        #Then return the plinkf object to iterate.
-        #Iterate through it like the lines of the matrix file, except you aren't reading those in line by line. Hopefully that proves to be faster.
-        #This method has slowdowns in transposing the data. If I could avoid doing that then it wouldn't be an issue.
-        #I guess the boost of going this other directino- not loading everything into memory- is no longer an issue, as plinkio is efficient.
-        #So, make one pass through the plinkio, 
-        #Note- the key xommands to know are just that plinkfile.PlinkFile has an iterator
-        #i.e. line = next(plinkf)
-        #repeat until youve gone through all samples.
-
-
-        #plinkf = plinkfile.PlinkFile("./ref") 
-        # #okay, the transpose call is slower than I'd like, certainly slower than reading in. I think that's because it does a write out, I wonder if this can be overridden. 
-        #Sad news- the transpose function doens't store anything, just writes it out to memory.
-        #Can plink transpose the data for me? hmmmmm
-        #Maybe. It looks like maybe. In that case, what if we use plink to subset our SNPs (although, this isn't the smartest way to do it), then transpose the data, then load it in and iterate it?
-        #This is an option to pursue.
-        #Alternatively, just go through only to the relevant SNPs andg et the info, but that seems wasteful.
-        #So there is something rotated of the file
-
-        #So it doesn't look like plink2 will do the transposition for me. That's weird
-        #So is it better to transpose it use libplinkio or just marse it the way they have?
-        #Or should I rebuild my whole parser?
-
 
     #snp_matrix_plinkio = plinkioReadIn(args.plink_snps)
     snp_indices = filterSumStats(pvals,stats_complete)
