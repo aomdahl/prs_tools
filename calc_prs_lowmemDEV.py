@@ -98,7 +98,7 @@ def prepSNPIDs(snp_file, ss_file, ss_type, ambig, id_type):
         #command_n = "tail -n +2 local_geno.pvar | awk ' ($1 !~ /X/) {print $1}' |   cut -f 3 > geno_ids.f"
         command_n = "awk ' (NR> 1 && $1 !~ /X/) {print $3}'  local_geno.pvar > geno_ids.f"
         call(command_n, shell = True)
-        
+        #input("blah") 
     if not os.path.isfile("ss_filt.f"):
         #ss = pd.read_csv(s_path, sep = ' ', header = None,  names = [REFID, REF,ALT, BETA,SEBETA,TSTAT, PVAL], dtype= { REF:'category',ALT: 'category', BETA:'float64', PVAL:'float64', SEBETA:'float64', TSTAT:'float64'})
         #Note that for all types, we expect IDs to be of the form chr:#:ref:alt
@@ -139,7 +139,11 @@ def hashMapBuild(ss_snps, plink_snps, ret_tap): #we need to deal with this issue
             #input()
     return ret_tap
         
-
+#Method for determine if IDs are in the right order
+#Doesn't check every id, just samples a few to reduce our confidence that we have the same order
+#By checking >= 5 locations at random and ensuring they are the same. 
+#If each position is equally likely for each entry, then the probability of having different entries by chance
+#For this many checks is really small.
 def quickIDCheck(ss_order, plink_order):
     #Try a number of samples to you get a high certainty
     PROB_ACC = 0.0000001
@@ -150,7 +154,7 @@ def quickIDCheck(ss_order, plink_order):
     for i in range(0, int(min_run)+5): #I want to do at least 5. Actually a better way may be to sum up the ids across an interval and see if those are the same
         rand = random.randint(0, len(ss_order))
         if plink_order[rand].name != ss_order.iloc[rand]:
-            print("It didn't work as we wanted.....", plink_order[rand].name, ss_order.iloc[rand])
+            #print("It didn't work as we wanted.....", plink_order[rand].name, ss_order.iloc[rand])
             return False
         
     return True
@@ -163,8 +167,11 @@ def buildVarMap(plink_order, ss_order):
 
     if quickIDCheck(ss_order, plink_order):
         return np.array(range(0, len(ss_order) + 1)) 
+     
     ret = np.zeros(len(ss_order), dtype = np.int32)
+    ret = hasMapBuild(ss_order, plink_order, ret) 
     search_count = 0
+    """
     #There is a better way:
     for i in range(0, len(ss_order)):
         curr_ss = ss_order.iloc[i]
@@ -172,10 +179,6 @@ def buildVarMap(plink_order, ss_order):
         try:
             id_name = str(plink_order[i].name) + ":" + str(plink_order[i].allele2) + ":" + str(plink_order[i].allele1)
             if curr_ss != plink_order[i].name and curr_ss != id_name: #But if for some reason it isn't a match....
-                #TODO: check the alt and ref here potentially.
-                print("Defaulted, in the hashMapbuilder")
-                print(plink_order[i].name)
-                print(id_name)
                 ret = hashMapBuild(ss_order, plink_order, ret)
                 break
         except IndexError:
@@ -185,11 +188,11 @@ def buildVarMap(plink_order, ss_order):
             input()
         
         ret[i] = int(map_index)
+    """
     return ret
     
 
 def linearGenoParse(snp_matrix, snp_indices,pvals, scores, ss_ids):
-    #C
     from operator import itemgetter
     plinkf = plinkfile.PlinkFile(snp_matrix)
     print("Genotype binary loaded.")
@@ -203,8 +206,6 @@ def linearGenoParse(snp_matrix, snp_indices,pvals, scores, ss_ids):
         line = next(plinkf)
         for p in pvals:
             snp_index = snp_indices[p][INDEX]
-            #print(snp_index[-1])
-            #print(var_map)
             sel = var_map[snp_index]  
             res_list = np.array((itemgetter(*sel)(line)))
             scores[p].append(scoreCalculation(res_list,snp_indices[p][B]))
