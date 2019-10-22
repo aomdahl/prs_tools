@@ -37,9 +37,11 @@ def readInCol(fin):
     return ret_list
 
 def readInSummaryStats(s_path):
-    ss = pd.read_csv(s_path, sep = ' ', header = None,  names = [REFID, REF,ALT, BETA,SEBETA,TSTAT, PVAL], dtype= { REF:'category',ALT: 'category', BETA:'float64', PVAL:'float64', SEBETA:'float64', TSTAT:'float64'})
+    #ID, ref, alt, beta, pvalue. Th
+    ss = pd.read_csv(s_path, sep = ' ', header = None,  names = [REFID, REF,ALT, BETA, PVAL], dtype= { REF:'category',ALT: 'category', BETA:'float64', PVAL:'float64', SEBETA:'float64', TSTAT:'float64'})
+    #ss = pd.read_csv(s_path, sep = ' ', header = None,  names = [REFID, REF,ALT, BETA,SEBETA,TSTAT, PVAL], dtype= { REF:'category',ALT: 'category', BETA:'float64', PVAL:'float64', SEBETA:'float64', TSTAT:'float64'})
     print("Data in memory...")
-    ss.info(memory_usage='deep') 
+    #ss.info(memory_usage='deep') 
     
     #return ss.sort_values(by=[REFID])#, readInCol(ids_path)
     return ss
@@ -49,8 +51,6 @@ def filterSumStats(pvals,ss):
     for p in pvals:
         #print("Filtering sum stats, see if we get the right indices")
         samp = ss[(ss[PVAL] <= float(p))]
-        #print(samp)
-        #print(samp.index.tolist())
         pvals_ref[p] = [samp.index.tolist(), samp[BETA].values] #Get just the pvalues and the indices.
         #print("Scores as extracted from sum stats....")
         #print(pvals_ref[p][0], pvals_ref[p][1])
@@ -92,35 +92,33 @@ def prepSNPIDs(snp_file, ss_file, ss_type, ambig, id_type):
         command = '''awk '(!/##/) {print $1"\t"$2"\t"$3"\t"$4"\t"$5}' ''' + snp_file + ".pvar  > local_geno.pvar"
         #Simplifying things, we aren't going to re-write IDs....
         if id_type:
-            print("ID type")
             command = '''awk '(!/##/) {print $1"\t"$2"\t"$3":"$4":"$5"\t"$4"\t"$5}' ''' + snp_file + ".pvar " + " | sed '1 s/ID:REF:ALT/ID/' > local_geno.pvar"
         #command = '''awk '(!/##|ID/ && $1 !~ /X/) {print $3":"$4":"$5}' ''' + snp_file + ".pvar > geno_ids.f"
         call(command, shell = True)
         #command_n = "tail -n +2 local_geno.pvar | awk ' ($1 !~ /X/) {print $1}' |   cut -f 3 > geno_ids.f"
-        command_n = "awk ' (NR> 1 && $1 !~ /X/) {print $3}'  local_geno.pvar > geno_ids.f" 
+        command_n = "awk ' (NR> 1 && $1 !~ /X/) {print $3}'  local_geno.pvar > geno_ids.f"
         call(command_n, shell = True)
-    
+        
     if not os.path.isfile("ss_filt.f"):
-        #TODO: modify this to read in right off the bat so not filtering so many times!
-        #Maybe I should read it in right off , and then filter at successive stages based on
         #ss = pd.read_csv(s_path, sep = ' ', header = None,  names = [REFID, REF,ALT, BETA,SEBETA,TSTAT, PVAL], dtype= { REF:'category',ALT: 'category', BETA:'float64', PVAL:'float64', SEBETA:'float64', TSTAT:'float64'})
-
+        #Note that for all types, we expect IDs to be of the form chr:#:ref:alt
+        #CHANGE on 10-22: only outputing the pare minimum, ID, ref, alt, beta, pvalue. The rest isn't needed
         if ss_type == "SAIGE":
             #ID, REF, ALT, BETA, SEBETA, Tstat,, pval
-            command = '''awk '(FNR == NR) {a[$1];next} (FNR == 1 && NR == 2) {next;} ($1":"$2 in a) {print $1":"$2, $4,$5,$10,$11,$12,$13}' geno_ids.f ''' + ss_file + " > ss_filt.f"
+             command = '''awk '(FNR == NR) {a[$1];next} (FNR == 1 && NR == 2) {next;} ($3 in a) {print $3, $4,$5,$10, $13}' geno_ids.f ''' + ss_file + " > ss_filt.f"  
+            #command = '''awk '(FNR == NR) {a[$1];next} (FNR == 1 && NR == 2) {next;} ($3 in a) {print $3, $4,$5,$10,$11,$12,$13}' geno_ids.f ''' + ss_file + " > ss_filt.f"  
         elif ss_type == "NEAL":
-            command = '''awk '(FNR == NR) {a[$1];next} (FNR == 1 && NR == 2) {next;} ($1 in a) {print $1, "N",$2,$8,$9,$10,$11}' geno_ids.f ''' + ss_file + " > ss_filt.f"   
+            command = '''awk '(FNR == NR) {a[$1];next} (FNR == 1 && NR == 2) {next;} ($1 in a) {print $1, "N",$2,$8,$11}' geno_ids.f ''' + ss_file + " > ss_filt.f"    
+            #command = '''awk '(FNR == NR) {a[$1];next} (FNR == 1 && NR == 2) {next;} ($1 in a) {print $1, "N",$2,$8,$9,$10,$11}' geno_ids.f ''' + ss_file + " > ss_filt.f"   
 
         else:
             print("The type of ss file hasn't been specified. Please specify this.")
     
         #command = '''awk '(FNR == 1) {next;} {print $1":"$2, $4,$5,$10,$11,$12,$13}' ''' + ss_file + " > ss_filt.f"
         call(command, shell = True)
-             
         #reset the ids we use downstream
         command = "cut -f 1 -d ' ' ss_filt.f > geno_ids.f"
         call(command, shell = True)
-
     return local_geno,"geno_ids.f", "ss_filt.f"
 
 def scoreCalculation(geno, betas):
@@ -141,12 +139,33 @@ def hashMapBuild(ss_snps, plink_snps, ret_tap): #we need to deal with this issue
             #input()
     return ret_tap
         
+
+def quickIDCheck(ss_order, plink_order):
+    #Try a number of samples to you get a high certainty
+    PROB_ACC = 0.0000001
+    import random
+    min_run = (np.log(PROB_ACC) / np.log(1/float(len(ss_order))))
+    print(min_run)
+    input("number of runs to do?")
+    for i in range(0, int(min_run)+5): #I want to do at least 5. Actually a better way may be to sum up the ids across an interval and see if those are the same
+        rand = random.randint(0, len(ss_order))
+        if plink_order[rand].name != ss_order.iloc[rand]:
+            print("It didn't work as we wanted.....", plink_order[rand].name, ss_order.iloc[rand])
+            return False
+        
+    return True
+
 def buildVarMap(plink_order, ss_order):
     """
         Return a numpy array that maps an index in the ss file to a number in plink
+        TODO: Speed up this step, its too slow
     """
+
+    if quickIDCheck(ss_order, plink_order):
+        return np.array(range(0, len(ss_order) + 1)) 
     ret = np.zeros(len(ss_order), dtype = np.int32)
     search_count = 0
+    #There is a better way:
     for i in range(0, len(ss_order)):
         curr_ss = ss_order.iloc[i]
         map_index = i #assume they are ordered the same
@@ -154,6 +173,9 @@ def buildVarMap(plink_order, ss_order):
             id_name = str(plink_order[i].name) + ":" + str(plink_order[i].allele2) + ":" + str(plink_order[i].allele1)
             if curr_ss != plink_order[i].name and curr_ss != id_name: #But if for some reason it isn't a match....
                 #TODO: check the alt and ref here potentially.
+                print("Defaulted, in the hashMapbuilder")
+                print(plink_order[i].name)
+                print(id_name)
                 ret = hashMapBuild(ss_order, plink_order, ret)
                 break
         except IndexError:
@@ -179,28 +201,13 @@ def linearGenoParse(snp_matrix, snp_indices,pvals, scores, ss_ids):
     var_map = buildVarMap(loci, ss_ids) #Need to check that this goes the way we expect.
     for i in range(0, num_patients):
         line = next(plinkf)
-        #for line in istream:
-        #time comparison
-        """
-        start_np = time.time()
-        dat = np.array(line,dtype = np.float64)
         for p in pvals:
             snp_index = snp_indices[p][INDEX]
-            sel = var_map[snp_index]
-            scores[p].append(scoreCalculation(dat[sel],snp_indices[p][B])) 
-        end_np = time.time()
-        print("time for np method:", str(end_np - start_np))
-        #__________ 
-        #now doing it the pythonic way
-        start_ig = time.time()
-        """
-        for p in pvals:
-            snp_index = snp_indices[p][INDEX]
-            sel = var_map[snp_index]
-            res_list = np.array((itemgetter(*sel)(line)))  #sadly we still have this...
+            #print(snp_index[-1])
+            #print(var_map)
+            sel = var_map[snp_index]  
+            res_list = np.array((itemgetter(*sel)(line)))
             scores[p].append(scoreCalculation(res_list,snp_indices[p][B]))
-        #end_ig = time.time()
-        #print("time for itemgettermethod:", str(end_ig - start_ig))
 
         if i % report_index == 0:
             print("Currently at patient", i + 1, "of", num_patients)
@@ -267,11 +274,8 @@ def plinkClump(reference_ld, clump_ref, geno_ids, ss):
     #Refilter the geno_id list
     #print(geno_ids)
     command = "awk '(FNR == NR) {a[$1];next} ($1 in a) {print $1}' " + clump_ref + " " + geno_ids + " > t && mv t " + geno_ids
-    print(command)
     #Read in the list
     call(command, shell = True)
-    #input("geno_ids filtered?")
-    #print("Clumping complete!")
     return ss, geno_ids
     
 
