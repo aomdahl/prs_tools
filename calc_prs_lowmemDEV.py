@@ -26,7 +26,7 @@ REF= "REF" #reference allele
 ALT = "ALT" #Alternate allele
 INDEX = 0
 B = 1
-
+VAR_IN_ID = False
         
 def readInCol(fin):
     ret_list = list()
@@ -51,9 +51,11 @@ def filterSumStats(pvals,ss):
     for p in pvals:
         #print("Filtering sum stats, see if we get the right indices")
         samp = ss[(ss[PVAL] <= float(p))]
+        #print(len(samp),"<- at threshold of", p)
         pvals_ref[p] = [samp.index.tolist(), samp[BETA].values] #Get just the pvalues and the indices.
-        #print("Scores as extracted from sum stats....")
-        #print(pvals_ref[p][0], pvals_ref[p][1])
+        #print(samp[BETA].values[-5:-1])
+        #print(samp.index.tolist()[-5:-1])
+    #input()
     return pvals_ref
         
 def prepSummaryStats(geno_ids, sum_path, pval_thresh):
@@ -62,14 +64,10 @@ def prepSummaryStats(geno_ids, sum_path, pval_thresh):
     """
     #If the id is in the geno_ids file, and it passes the p-value threshold, keep it
     command = "awk '($7 <= " + str(pval_thresh) + ") {print $0}' " + sum_path + " > ss.tmp"
-    #command = '''awk '(FNR == NR) {a[$1];next} ($1":"$3 in a && $7 <= ''' + str(pval_thresh) + ") {print $0}' " + geno_ids + " " + sum_path + " > ss.tmp"
-    #command = "awk '(FNR == NR) {a[$1];next} ($1 in a && $7 <= " + str(pval_thresh) + ") {print $0}' " + geno_ids + " " + sum_path + " > ss.tmp"
     call(command, shell = True) 
-    #call(["awk", "'FNR==NR{a[$1];next} ($1 in a && $7 <=", str(pval_thresh), "{ print $0}'", geno_ids, sum_path, ">", "ss.tmp"])
     command = "cut -f 1 -d ' ' ss.tmp > ss_ids.tmp"
     call(command, shell = True)
     #TODO: determine if the above awk/cut commands are faster than dask filtering + computing the IDs. Or maybe just doing that with pandas.
-   # call(["cut", "-f", "1", "-d","' '", "ss.tmp", ">", "ss_ids.tmp"]) #This gives the order of all the ids.
     return "ss.tmp", "ss_ids.tmp"
 
 #This will extract the ids we want to be working with.
@@ -124,37 +122,47 @@ def prepSNPIDs(snp_file, ss_file, ss_type, ambig, id_type):
 def scoreCalculation(geno, betas):
     return np.dot(2 - geno, betas)   
 
+#There must be a better way than this...
 def hashMapBuild(ss_snps, plink_snps, ret_tap): #we need to deal with this issue of multiallelic snps
     pref = dict()
+    
+    #Put all of the plink genotype SNPs into a dictionary for fast lookup
     for i in range(0, len(plink_snps)):
-        id_name = str(plink_snps[i].name) + ":" + str(plink_snps[i].allele2) + ":" + str(plink_snps[i].allele1) #why is this order so? nervous making
+        if VAR_IN_ID:
+            id_name= str(plink_snps[i].name)
+            #print(id_name)
+        else:
+            id_name = str(plink_snps[i].name) + ":" + str(plink_snps[i].allele2) + ":" + str(plink_snps[i].allele1) #why is this order so? nervous making
         pref[id_name] = i
+    ss_snp_names = ss_snps.values
     for j in range(0, len(ss_snps)):
-        curr_id = ss_snps.iloc[j]
+        curr_id = ss_snp_names[j]
         try:
             ret_tap[j] = int(pref[curr_id])
         except KeyError:
             print("Unable to find a match for ", curr_id)
             ret_tap[j] = -1
-            #input()
+    print("Re-indexing complete")
     return ret_tap
         
 #Method for determine if IDs are in the right order
-#Doesn't check every id, just samples a few to reduce our confidence that we have the same order
+#Doesn't check every id, just samples a few to improve our confidence that we have the same order
 #By checking >= 5 locations at random and ensuring they are the same. 
 #If each position is equally likely for each entry, then the probability of having different entries by chance
-#For this many checks is really small.
+#For this many checks is really small (i.e. (1/number of snps)^5).
 def quickIDCheck(ss_order, plink_order):
     #Try a number of samples to you get a high certainty
     PROB_ACC = 0.0000001
     import random
     min_run = (np.log(PROB_ACC) / np.log(1/float(len(ss_order))))
-    print(min_run)
-    input("number of runs to do?")
     for i in range(0, int(min_run)+5): #I want to do at least 5. Actually a better way may be to sum up the ids across an interval and see if those are the same
         rand = random.randint(0, len(ss_order))
         if plink_order[rand].name != ss_order.iloc[rand]:
             #print("It didn't work as we wanted.....", plink_order[rand].name, ss_order.iloc[rand])
+            print("SNP order not aligned, realigning now...")
+            print(plink_order[rand].name)
+            print(ss_order.iloc[rand])
+            
             return False
         
     return True
@@ -169,7 +177,7 @@ def buildVarMap(plink_order, ss_order):
         return np.array(range(0, len(ss_order) + 1)) 
      
     ret = np.zeros(len(ss_order), dtype = np.int32)
-    ret = hasMapBuild(ss_order, plink_order, ret) 
+    ret = hashMapBuild(ss_order, plink_order, ret) 
     search_count = 0
     """
     #There is a better way:
@@ -271,11 +279,8 @@ def plinkClump(reference_ld, clump_ref, geno_ids, ss):
     #Actually, I should be able to just filter the list based on the plink input... buttt then we still have an order issue. Which I guess doesn't matter but.
     command = "awk '(FNR == NR) {a[$1];next} ($1 in a) {print $0}' " + clump_ref + " " + ss + " > t && mv t " + ss
     call(command, shell = True)
-    #input("ss list filtered?")
-    #Refilter the geno_id list
-    #print(geno_ids)
-    command = "awk '(FNR == NR) {a[$1];next} ($1 in a) {print $1}' " + clump_ref + " " + geno_ids + " > t && mv t " + geno_ids
-    #Read in the list
+    #command = "awk '(FNR == NR) {a[$1];next} ($1 in a) {print $1}' " + clump_ref + " " + geno_ids + " > t && mv t " + geno_ids
+    command = "cut -f 1 -d ' ' " + ss " > " geno_ids
     call(command, shell = True)
     return ss, geno_ids
     
@@ -345,7 +350,9 @@ if __name__ == '__main__':
     start = time.time()
     if args.pvals:
         pvals = [float(x) for x in (args.pvals).split(",")]
-        
+    if args.var_in_id:
+        VAR_IN_ID = True    
+    
     print("Selecting IDs for analysis...")
     local_pvar, geno_ids, ss_parse = prepSNPIDs(args.plink_snps, args.sum_stats,args.ss_format, args.no_ambig, args.var_in_id)
     print("Reading data into memory (only done on first pass)")
