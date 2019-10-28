@@ -35,7 +35,7 @@ plotCorr <- function(dat, output, style_name)
     dat[,1] <- as.numeric(as.character(dat[,1]))
     dat <- dat[order(dat$pval_names),]
     dat$pval_names <- as.factor(dat$pval_names)
-    ggplot(dat, aes(pval_names, corr_r)) + geom_bar(stat = "identity") + labs(x="P-value threshold", y = paste("R2",style_name))
+    ggplot(dat, aes(pval_names, r2)) + geom_bar(stat = "identity") + labs(x="P-value threshold", y = paste("R2",style_name))
     ggsave(filename = paste0(output, "bar_plot.",style_name, ".png"))    
 }
 
@@ -45,14 +45,12 @@ plotCorr <- function(dat, output, style_name)
 fl <- Sys.glob(paste0(args$prs_results,"*.tsv"))
 #fl <- c(args$prs_results)
 print(fl)
-corr_r <- c()
+r2 <- c()
 corr_name <- args$r2
 pval_names <- c()
 trait <- args$risk_trait
 print(trait)
 phenos <- read_tsv(args$pheno) %>% select("IID", "gender", "age", "DBP")
-print(phenos)
-print("Starting soon...")
 for (f in fl)
 {
     filename <- basename(f)
@@ -64,12 +62,16 @@ for (f in fl)
     print(pval_names)
     MI_pred <- na.omit(MI_pred)
     #write_tsv(MI_pred, "sandbox_copy.tsv")
-    #If the trait is continuous, do regular R2. 
+    #If the trait is continuous, do regular R2.
+    print(MI_pred[trait])
+    print(MI_pred["0.1"]) 
     if(length(unique(MI_pred[trait])) > 2 || !(args$case_control))
     {
         for (n in pval_names)
 {
-        corr_r <- c(corr_r, cor(MI_pred[trait], MI_pred[n]))
+        #r2 <- c(r2, cor(MI_pred[trait], MI_pred[n]))
+        lmv <- lm(MI_pred$DBP ~ MI_pred[[n]])
+        r2 <- c(r2, summary(lmv)$r.squared)
         #Some other plots
         ggplot(MI_pred, aes(x=c(0), y =n)) + geom_jitter(position=position_jitter(0.1), aes(fill = MI_pred$DBP)) + xlim(-0.4, 0.4) + theme(axis.title.x=element_blank(), axis.text.x=element_blank(), axis.ticks.x=element_blank())
         ggsave(filename = paste0(n, "dotplot.png"))
@@ -91,11 +93,11 @@ for (f in fl)
         for(p in pval_names){
             if(args$r2 == "nagelkerke")
             {
-                corr_r <- c(corr_r, R2ObservedNagelkerke(trait,p, MI_pred))
+                r2 <- c(r2, R2ObservedNagelkerke(trait,p, MI_pred))
             }
             else
             {
-                corr_r <- c(corr_r, R2LiabilityProbit(trait, p, MI_pred))
+                r2 <- c(r2, R2LiabilityProbit(trait, p, MI_pred))
             }
         }
     }
@@ -103,7 +105,7 @@ for (f in fl)
     print(paste("Completed review for", f)) 
 }
 #Do that for each individually. Now get the
-dat <- data.frame(pval_names, corr_r)
+dat <- data.frame(pval_names, r2)
 write_tsv(dat, "corr_counts.tsv")
 plotCorr(dat, args$output, corr_name)
 
