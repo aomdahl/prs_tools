@@ -70,7 +70,7 @@ for (f in fl)
         for (n in pval_names)
 {
         #r2 <- c(r2, cor(MI_pred[trait], MI_pred[n]))
-        lmv <- lm(MI_pred$DBP ~ MI_pred[[n]])
+        lmv <- lm(MI_pred[[trait]] ~ MI_pred[[n]])
         r2 <- c(r2, summary(lmv)$r.squared)
         #Some other plots
         ggplot(MI_pred, aes(x=c(0), y =n)) + geom_jitter(position=position_jitter(0.1), aes(fill = MI_pred$DBP)) + xlim(-0.4, 0.4) + theme(axis.title.x=element_blank(), axis.text.x=element_blank(), axis.ticks.x=element_blank())
