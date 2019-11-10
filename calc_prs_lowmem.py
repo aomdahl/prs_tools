@@ -81,7 +81,7 @@ def prepSNPIDs(snp_file, ss_file, ss_type, ambig, id_type, vplink = 2):
         if vplink == 1:
             local_geno = "local_geno.bim"
     if not ambig:
-        print("Please remove ambiguous snps. program will terminate")
+        print("Please remove ambiguous snps from summary stats. program will terminate")
         sys.exit()
 
     #Remove all the header lines, just get what we need.
@@ -92,7 +92,8 @@ def prepSNPIDs(snp_file, ss_file, ss_type, ambig, id_type, vplink = 2):
         command = '''awk '(!/##/) {print $1"\t"$2"\t"$3"\t"$4"\t"$5}' ''' + snp_file + ".pvar  > local_geno.pvar"
         #Simplifying things, we aren't going to re-write IDs....
         if id_type: #This argument means the IDs in the genotype data are NOT as we wish them to be. Need to modify 
-            command = '''awk '(!/##/) {print $1"\t"$2"\t"$1":"$2":"$4":"$5"\t"$4"\t"$5}' ''' + snp_file + ".pvar " + " | sed '1 s/ID:REF:ALT/ID/' > local_geno.pvar"
+            command = ''' awk '(!/##/ && /#/) {print $1"\t"$2"\tID\t"$4"\t"$5} (!/#/) {print $1"\t"$2"\t"$1":"$2":"$4":"$5"\t"$4"\t"$5}' ''' + snp_file + ".pvar > local_geno.pvar"
+            #command = '''awk '(!/##/) {print $1"\t"$2"\t"$1":"$2":"$4":"$5"\t"$4"\t"$5}' ''' + snp_file + ".pvar " + " | sed '1 s/ID:REF:ALT/ID/' > local_geno.pvar"
             if vplink != 2:
                 command = '''awk '{print $1"\t"$1":"$4":"$5":"$6"\t"$3"\t"$4"\t"$5"\t"$6}' ''' + snp_file + ".bim > local_geno.bim"
         check_call(command, shell = True)
@@ -208,49 +209,6 @@ def buildVarMap(plink_order, ss_order):
     """
     return ret
     
-"""
-Commented out- this is the plinkio based versino, we are no longer using
-def linearGenoParse(snp_matrix, snp_indices,pvals, scores, ss_ids):
-    from operator import itemgetter
-    plinkf = plinkfile.PlinkFile(snp_matrix)
-    print("Genotype binary loaded.")
-    patient_ids = plinkf.get_samples()
-    num_patients = len(patient_ids)
-    report_index = int(num_patients * 0.1)
-    #Check that our mapping of loci is right....
-    loci = plinkf.get_loci()
-    var_map = buildVarMap(loci, ss_ids) #Need to check that this goes the way we expect.
-    if DEBUG:
-        debug_betas = scores.copy()
-        debug_snps = scores.copy()
-        
-    for i in range(0, num_patients):
-        line = next(plinkf)
-        for p in pvals:
-            snp_index = snp_indices[p][INDEX]
-            sel = var_map[snp_index]  
-            res_list = np.array((itemgetter(*sel)(line)))
-            scores[p].append(scoreCalculation(res_list,snp_indices[p][B]))
-            print("First 10")
-            print(res_list[:10])
-            print(snp_indices[p][B][:10])
-            print("Last 10")
-            print(res_list[-11:])
-            print(snp_indices[p][B][-11:])
-            input()    
-        if i % report_index == 0:
-            print("Currently at patient", i + 1, "of", num_patients)
-    if DEBUG:
-        print("Writing out requested debug information")
-        for p in pvals:
-            snp_index = snp_indices[p][INDEX]
-            sel = var_map[snp_index] 
-            res_list = np.array((itemgetter(*sel)(line)))
-            debug_betas[p] = snp_indices[p][B]
-            debug_snps[p] = [ loci[s].name for s in sel ]
-        return scores, patient_ids, [debug_snps, debug_betas] #basically a pval:[list of snps]  
-    return scores, patient_ids, None
-"""
 
 def linearGenoParse(snp_matrix, snp_indices,pvals, scores, ss_ids):
     """Parse the patient file
@@ -265,13 +223,16 @@ def linearGenoParse(snp_matrix, snp_indices,pvals, scores, ss_ids):
     from operator import itemgetter
     patient_ids = list()
     report_index = 100
+    print(snp_matrix + ".raw")
     with open(snp_matrix + ".raw", 'r') as istream:
         line_counter = 0
         print("Reading in first line...")
         dat = istream.readline().strip().split()
         while dat:
             if line_counter == 0:
-                var_map = buildVarMap(dat[6:], ss_ids) #Need to check that this goes the way we expect.
+                var_map = buildVarMap(dat[6:], ss_ids)
+                print("Proceeding with line-by-line calculation now...")
+                 #Need to check that this goes the way we expect.
             else:
                 #dat = line.split() #Oct 31 Benchmark tests (see sept2019 ProjectTracking) show its faster to do it in one line
                 patient_ids.append(dat[0])
@@ -306,6 +267,7 @@ def linearGenoParse(snp_matrix, snp_indices,pvals, scores, ss_ids):
         """
     if line_counter == 1:
         print("There appears to be some error with the genotype plink matrix. Please ensure the genotype data is correct or the plink call was not interrupted.")
+        sys.exit()
     return scores, patient_ids, None
 
 
@@ -327,22 +289,52 @@ def sameAlleleAssesment(s1, s2):
         print("^Unusual case")
         return False
 
+def alignReferenceByPlink(old_plink, ss, ss_type):
+    #Make the reference file with major 
+    #get the reference information you want
+    if ss_type == "SAIGE":
+        first = '''awk '(NR >1) {print $1":"$2"\t"$4} ' ''' + ss + " | uniq > aligner.t"
+        check_call(first, shell = True)
+    elif ss_type == "NEAL":
+        #Separate the major allele from the other info
+        first = "cut -f 1 " + ss + " | tail -n +2 | cut -f 1,2 -d ':' > ids.t"
+        second = "cut -f 1 " + ss + " | tail -n +2 | cut -f 3 -d ':' > ref.t"
+        final = "paste ids ref | uniq> aligner.t"
+    
+        check_call(first, shell = True)
+        check_call(second, shell = True)
+        check_call(final, shell = True) 
+    else:
+        print("Have not extended the method for type", ss_type, ". Please align Reference information manually")
+        sys.exit()
+    
+    plink_call = "plink2 --pfile " + old_plink  + " --not-chr X --out new_plink --ref-allele force aligner.t --make-pgen" 
+    check_call(plink_call, shell = True) 
+    clean_up = "rm *.t"
+    check_call(clean_up, shell = True)
+    return "new_plink"
+
 def plinkToMatrix(snp_keep, args, local_pvar, vplink):
     """
     @param snp_keep is the path to the file with the SNP list. Currently just a single column, TODO check if this will work for plink filtering.
     """
+
     #Write out the list of SNPs to keep
     #if os.path.isfile("mat_form_tmp.bed"):
+    #Make sure the REF alleles line up the right way....
+#cut -f 1 ../benchmarking_nov/chs1/ss_filt.f | cut -f 1,2,3 -d ":" | uniq | sed 's/:\([AGCT]\)/\t\1/g'  |head
     if os.path.isfile("mat_form_tmp.raw"):
         print("Using currently existing genotype matrix...")
     else:
+        syscall = " --pfile "
+        annot =  " --pvar "
         if vplink == 1:
-            #check_call(["plink2", "--bfile", args, "--bim", local_pvar, "--not-chr", "X", "--extract", snp_keep, "--out", "mat_form_tmp", "--export", "ind-major-bed", "--max-alleles", "2"])
-            check_call(["plink2", "--bfile", args, "--bim", local_pvar, "--not-chr", "X", "--extract", snp_keep, "--out", "mat_form_tmp", "--export", "A", "--max-alleles", "2"])
-        else:  #we have the data in plink2 format.       
-            check_call(["plink2", "--pfile", args, "--pvar", local_pvar, "--not-chr", "X", "--extract", snp_keep, "--out", "mat_form_tmp", "--export", "A", "--max-alleles", "2"]) 
-            #Okay, this new version changes it to plink 1, doesn't write out a massive matrix, and makes it patient first indexed
-            #check_call(["plink2", "--pfile", args, "--pvar", local_pvar, "--not-chr", "X", "--extract", snp_keep, "--out", "mat_form_tmp", "--export", "ind-major-bed", "--max-alleles", "2"])
+            syscall = " --bfile "
+            annot = " --bim "
+            #check_call(["plink2", "--bfile", args, "--bim", local_pvar, "--not-chr", "X", "--extract", snp_keep, "--out", "mat_form_tmp", "--export", "A", "--max-alleles", "2"], shell = True)
+        call = "plink2 " + syscall  + args + annot + local_pvar + " --not-chr X --extract " + snp_keep + " --out mat_form_tmp --export A --max-alleles 2"
+        check_call(call, shell = True) 
+        
         print("New plink matrix made!")
         if not os.path.isfile("mat_form_tmp.raw"): #C
             print("PLINK file was not correctly created. Program will terminate.")
@@ -363,7 +355,7 @@ def plinkClump(reference_ld, clump_ref, geno_ids, ss):
         command = "awk ' {print $1,$NF} ' " + ss + ">> clump_ids.tmp"
         check_call(command, shell = True)
         #Run plink clumping
-        plink_command = "plink --bfile " + reference_ld + "--clump clump_ids.tmp --clump-best"
+        plink_command = "plink --bfile " + reference_ld + " --clump clump_ids.tmp --clump-best"
         check_call(plink_command, shell = True)
         clump_file = "plink.clumped.best"
     else:
@@ -460,6 +452,7 @@ if __name__ == '__main__':
     parser.add_argument("--debug", help = "Specify this if you wish to output debug results", default = False, action = "store_true")
     parser.add_argument("--clump_ref", help = "Specify this option if you wish to perform clumping and already have a plink clump file produced (the output of plink1.9 with the --clump-best argument). Provide the path to this file.", default = "NA")
     parser.add_argument("-pv", "--plink_version", default = 2, help = "Specify which version of plink files you are using for the reference data.", type = int, choices = [1,2])
+    parser.add_argument("--align_ref", action = "store_true", help = "Specify this if you would like us to align the reference alleles between the target and training data. If this is already done, we recommend omitting this flag since it will create an additional copy of the genotype data.")
     args = parser.parse_args()
     pvals = [args.pval]
     DEBUG = args.debug
@@ -468,10 +461,12 @@ if __name__ == '__main__':
         pvals = [float(x) for x in (args.pvals).split(",")]
     if args.var_in_id:
         VAR_IN_ID = True
-    
+    if args.align_ref:
+        args.plink_snps = alignReferenceByPlink(args.plink_snps, args.sum_stats, args.ss_format) #Make a local copy of the data with the updated genotype
+        print("new plink file", args.plink_snps) 
     print("Selecting IDs for analysis...")
     local_pvar, geno_ids, ss_parse = prepSNPIDs(args.plink_snps, args.sum_stats,args.ss_format, args.no_ambig, args.var_in_id, args.plink_version)
-    print("Time for SNP filtering:", str(time.time() - start))
+    print("Time for preprocessing (SNP filtering, reference alignemtn if specified, etc.", str(time.time() - start))
     print("Reading data into memory (only done on first pass)")
     #Selecting out SNPs that are likely in LD
     #at this point, the geno ids and ss parse list  has what we want. We will reduce it more though through clumping via plink.
@@ -488,7 +483,6 @@ if __name__ == '__main__':
         writeScoresDebug(debug_dat[0], "debug_vals_snps.tsv")
         writeScoresDebug(debug_dat[1], "debug_vals_betas.tsv")
     #Match SNPs by address and/or reference ID.
-    print("Scores written out to", args.output + ".tsv")
     stop = time.time()
     print("Total runtime:", str(stop - start))
 
