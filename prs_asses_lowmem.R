@@ -35,7 +35,7 @@ plotCorr <- function(dat, output, style_name)
     dat[,1] <- as.numeric(as.character(dat[,1]))
     dat <- dat[order(dat$pval_names),]
     dat$pval_names <- as.factor(dat$pval_names)
-    ggplot(dat, aes(pval_names, r2)) + geom_bar(stat = "identity") + labs(x="P-value threshold", y = paste("R2",style_name))
+    ggplot(dat, aes(pval_names, r2)) + geom_bar(stat = "identity") + labs(x="P-value threshold", y = expression(paste(R ^ 2,style_name)))
     ggsave(filename = paste0(output, "bar_plot.",style_name, ".png"))    
 }
 
@@ -44,13 +44,12 @@ plotCorr <- function(dat, output, style_name)
 #get the files we are looking at
 fl <- Sys.glob(paste0(args$prs_results,"*.tsv"))
 #fl <- c(args$prs_results)
-print(fl)
 r2 <- c()
-corr_name <- args$r2
+r2_name <- args$r2
 pval_names <- c()
 trait <- args$risk_trait
 print(trait)
-phenos <- read_tsv(args$pheno) %>% select("IID", "gender", "age", "DBP")
+phenos <- read_tsv(args$pheno) %>% select("IID", "gender", "age", trait)
 for (f in fl)
 {
     filename <- basename(f)
@@ -65,7 +64,7 @@ for (f in fl)
     #If the trait is continuous, do regular R2.
     print(MI_pred[trait])
     print(MI_pred["0.1"]) 
-    if(length(unique(MI_pred[trait])) > 2 || !(args$case_control))
+    if(length(unique(MI_pred[trait])) > 2 && !(args$case_control))
     {
         for (n in pval_names)
 {
@@ -74,13 +73,12 @@ for (f in fl)
         r2 <- c(r2, summary(lmv)$r.squared)
         #Some other plots
         ggplot(MI_pred, aes(x=c(0), y =n)) + geom_jitter(position=position_jitter(0.1), aes(fill = MI_pred$DBP)) + xlim(-0.4, 0.4) + theme(axis.title.x=element_blank(), axis.text.x=element_blank(), axis.ticks.x=element_blank())
-        ggsave(filename = paste0(n, "dotplot.png"))
+        ggsave(filename = paste0(args$output, n, "dotplot.png"))
 } 
    }
     else #Its a case control trait
     {
         #This step is problematic.
-        print("Checkpoint")
         #MI_pred[,4] <- as.factor(MI_pred[,4])
         #ggplot(MI_pred,aes(x=Score, color = trait)) + geom_histogram() +labs(x="PRS", y="Count", title="Distribution of PRS Scores")
         #ggsave(filename = paste0(args$output,substr(filename,1,nchar(f)-4), ".histogram.png"))
@@ -94,10 +92,12 @@ for (f in fl)
             if(args$r2 == "nagelkerke")
             {
                 r2 <- c(r2, R2ObservedNagelkerke(trait,p, MI_pred))
+                r2_name <- "Nagelkerke" 
             }
             else
             {
                 r2 <- c(r2, R2LiabilityProbit(trait, p, MI_pred))
+                r2_name <- "Liability Scale (Probit)"
             }
         }
     }
@@ -107,5 +107,5 @@ for (f in fl)
 #Do that for each individually. Now get the
 dat <- data.frame(pval_names, r2)
 write_tsv(dat, "corr_counts.tsv")
-plotCorr(dat, args$output, corr_name)
+plotCorr(dat, args$output, r2_name)
 
