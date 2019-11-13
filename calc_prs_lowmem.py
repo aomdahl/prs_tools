@@ -31,6 +31,13 @@ INDEX = 0
 B = 1
 VAR_IN_ID = False
 DEBUG = True        
+LOG="log_file.txt"
+
+def updateLog(*prints):
+    with open(LOG, 'a') as ostream:
+        for a in prints:
+            ostream.write(a + " ")
+        ostream.write("\n")
 
 def readInSummaryStats(s_path):
     #ID, ref, alt, beta, pvalue. Th
@@ -73,9 +80,6 @@ def prepSNPIDs(snp_file, ss_file, ss_type, ambig, id_type, vplink = 2):
         local_geno = "local_geno.pvar" #We will be making our own pvar
         if vplink == 1:
             local_geno = "local_geno.bim"
-    if not ambig:
-        print("Please remove ambiguous snps from summary stats. program will terminate")
-        sys.exit()
 
     #Remove all the header lines, just get what we need.
     if not os.path.isfile('geno_ids.f'):
@@ -90,7 +94,12 @@ def prepSNPIDs(snp_file, ss_file, ss_type, ambig, id_type, vplink = 2):
             if vplink ==1:
                 #Note that this puts the allele in chr:num:minor:major
                 command = '''awk '{print $1"\t"$1":"$4":"$5":"$6"\t"$3"\t"$4"\t"$5"\t"$6}' ''' + snp_file + ".bim > local_geno.bim"
-        check_call(command, shell = True)
+        try:
+            check_call(command, shell = True)
+        except subprocess.CalledProcessError:
+            print("Unable to generate modified pvar/bim file. Are you sure you specified the correct plink version?")
+            print("Failed on command", command)
+            sys.exit()
         #Step 2: Generate file of the IDs from genotype data for filtering of the summary statistics
         if vplink == 2:
             command_n = "awk ' (NR> 1 && $1 !~ /X/) {print $3}'  local_geno.pvar > geno_ids.f"
@@ -109,7 +118,7 @@ def prepSNPIDs(snp_file, ss_file, ss_type, ambig, id_type, vplink = 2):
             command = '''awk '(FNR == NR) {a[$1];next} (FNR == 1 && NR == 2) {next;} ($1 in a) {print $1, "N",$2,$8,$11}' geno_ids.f ''' + ss_file + " > ss_filt.f"    
             #command = '''awk '(FNR == NR) {a[$1];next} (FNR == 1 && NR == 2) {next;} ($1 in a) {print $1, "N",$2,$8,$9,$10,$11}' geno_ids.f ''' + ss_file + " > ss_filt.f"   
         elif ss_type == "TAIBO": #SNP chr BP, A1 A2 P Beta --> ID ref alt beta pvalue
-            command = '''awk '(FNR == NR) {a[$1];next} (FNR == 1 && NR == 2) {next;} ($1":"$5":"$4 in a) {print $1":"$5":"$5, $5,$4,$7,$6 }' geno_ids.f ''' + ss_file + " > ss_filt.f"
+            command = '''awk '(FNR == NR) {a[$1];next} (FNR == 1 && NR == 2) {next;} ($1":"$5":"$4 in a) {print $1":"$5":"$4, $5,$4,$7,$6 }' geno_ids.f ''' + ss_file + " > ss_filt.f"
         else:
             print("The type of ss file hasn't been specified. Please specify this.")
     
@@ -292,20 +301,55 @@ def alignReferenceByPlink(old_plink,plink_version, ss, ss_type):
     ftype = " --pfile "
     if plink_version == 1:
         ftype = " --bfile "
-    plink_call = "plink2" + ftype + old_plink  + " --not-chr X --out new_plink --ref-allele force aligner.t --make-pgen" 
+    #plink_call = "plink2" + ftype + old_plink  + " --not-chr X --out new_plink --ref-allele force aligner.t --make-pgen" 
+    plink_call = "plink2" + ftype + old_plink  + " --not-chr X --out new_plink --ref-allele aligner.t --make-pgen" 
     check_call(plink_call, shell = True) 
     clean_up = "rm *.t"
     check_call(clean_up, shell = True)
     return "new_plink"
 
 def filterAmbiguousSNPs(ss, ss_type, thresh = str(0.4)):
+    #okay, I'm biting the bullet and reading it in...
+    #there are 4 stages:
+    #1) Limit it to SNPs only
+    #2) Limit to nonambiguous SNPs, if possible
+    #3) Remove null beta values
+    #4) Remove X chromosome
+    filter_list = {"AG", "AC", "AT", "TA", "TC", "TG", "GC", "GT", "GA", "CG", "CT", "CA"}
+    noambig_list = {"AC", "AG", "CA", "CT", "GA", "GT", "TC", "TG"}
+    sizes = {"start": 0, "ambig":0, "na":0, "x":0}
+    ss_t = None
+    out_name = "noAmbig_lowfilt.ss"
     if ss_type == "TAIBO":
-       call_str=  '''awk  '(FNR == 1) {print $0} (($5=="A"&&$4=="C") || ($5=="A"&&$4=="G") || ($5=="C"&&$4=="A") || ($5=="C"&&$4=="T") || ($5=="G"&&$4=="A") || ($5=="G"&&$4=="T") || ($5=="T"&&$4=="C") || ($5=="T"&&$4=="G") || (($5=="A"&&$4=="T") && $4 > 0.4) || (($5=="T"&&$4=="A") && $4 > 0.4) || (($5=="G"&&$4=="C") && $4 > 0.4) || (($5=="C"&&$4=="G") && $4 > 0.4) ){print $0}' ''' + ss + " > noAmbig_lowfilt.ss" 
+        ss_t = pd.read_csv(ss, sep = '\t')
+        sizes["start"] = ss_t.shape[0]
+        ss_t["comb"] = ss_t.A1 + ss_t.A2
+        ss_t = ss_t[ss_t.comb.isin(noambig_list)]
+        sizes["ambig"] = ss_t.shape[0]
+        #Also remove SNPs with NA
+        ss_t = ss_t[ss_t.BETA.notnull()]
+        sizes["na"] = ss_t.shape[0]
+        #Also remove X chromosome
+        ss_t = ss_t[ss_t.CHR != "X"]
+        sizes["x"] = ss_t.shape[0]
+        
+        #call_str=  '''awk  '(FNR == 1) {print $0} (($5=="A"&&$4=="C") || ($5=="A"&&$4=="G") || ($5=="C"&&$4=="A") || ($5=="C"&&$4=="T") || ($5=="G"&&$4=="A") || ($5=="G"&&$4=="T") || ($5=="T"&&$4=="C") || ($5=="T"&&$4=="G") || (($5=="A"&&$4=="T") && $4 > 0.4) || (($5=="T"&&$4=="A") && $4 > 0.4) || (($5=="G"&&$4=="C") && $4 > 0.4) || (($5=="C"&&$4=="G") && $4 > 0.4) ){print $0}' ''' + ss + " > noAmbig_lowfilt.ss" 
     else:
         call_str = "echo Nothing given"
-    call_str = call_str.replace("0.4", thresh)
-    check_call(call_str, shell = True)
-    return "noAmbig_lowfilt.ss"
+    #call_str = call_str.replace("0.4", thresh)
+    #check_call(call_str, shell = True)
+    end_size = ss_t.shape[0]
+    prev = "start"
+    for t in sizes:
+
+        if t == "start":
+            updateLog(str(sizes[t]) + " variants submittedin summary statistics file.")
+        else:
+            updateLog(str(sizes[prev]-sizes[t]) +" " + t + " SNPs and indels removed")
+            prev = t
+    #Write out to file
+    ss_t.to_csv(out_name, sep = '\t') 
+    return out_name
 
 def plinkToMatrix(snp_keep, args, local_pvar, vplink):
     """
@@ -443,20 +487,23 @@ if __name__ == '__main__':
     args = parser.parse_args()
     pvals = [args.pval]
     DEBUG = args.debug
-    start = time.time()
-    
+    start = time.time()    
     if args.pvals:
         pvals = [float(x) for x in (args.pvals).split(",")]
+        updateLog("Pvals to asses:", str(pvals))
     if args.var_in_id:
         VAR_IN_ID = True
+    #there are ways to improve this....
     if not args.no_ambig:
         print("Ambiguous SNPs and indels have not been filtered out from SS data. Filtering now...")
         args.sum_stats = filterAmbiguousSNPs(args.sum_stats, args.ss_format)
         print("Ambiguous SNPs and indels removed. New file is", args.sum_stats)
+        input()
     if args.align_ref:
         args.plink_snps = alignReferenceByPlink(args.plink_snps, args.plink_version, args.sum_stats, args.ss_format) #Make a local copy of the data with the updated genotype
         print("new plink file", args.plink_snps)
         input("Strand flips have been corrected for. Proceed with analysis?")
+        args.plink_version =2 #We have updated the type to 2
     
     print("Selecting IDs for analysis...")
     local_pvar, geno_ids, ss_parse = prepSNPIDs(args.plink_snps, args.sum_stats,args.ss_format, args.no_ambig, args.var_in_id, args.plink_version)
@@ -480,6 +527,6 @@ if __name__ == '__main__':
     print("Scores written out to ", args.output + ".tsv")
     stop = time.time()
     print("Total runtime:", str(stop - start))
-
+    #TODO: Add cleanup functionality, remove the massive files you've made.
 
 
