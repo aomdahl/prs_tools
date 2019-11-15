@@ -91,11 +91,12 @@ def prepSNPIDs(snp_file, ss_file, ss_type, ambig, id_type, vplink = 2, max_p = 1
         #Simplifying things, we aren't going to re-write IDs....
         if id_type: #This argument means the IDs in the genotype data are NOT as we wish them to be. Need to modify 
             command = ''' awk '(!/##/ && /#/) {print $1"\t"$2"\tID\t"$4"\t"$5} (!/#/) {print $1"\t"$2"\t"$1":"$2":"$4":"$5"\t"$4"\t"$5}' ''' + snp_file + ".pvar > local_geno.pvar"
-            updateLog("Number of variants detected in original genotype file", str(getEntryCount(snp_file + ".pvar", True)))
             if vplink == 1:
                 #Note that this puts the allele in chr:num:minor:major
                 command = '''awk '{print $1"\t"$1":"$4":"$5":"$6"\t"$3"\t"$4"\t"$5"\t"$6}' ''' + snp_file + ".bim > local_geno.bim"
                 updateLog("Number of variants detected in original genotype file", str(getEntryCount(snp_file + ".bim", False)))
+            else:
+                updateLog("Number of variants detected in original genotype file", str(getEntryCount(snp_file + ".pvar", True)))
         try:
             check_call(command, shell = True)
         except subprocess.CalledProcessError:
@@ -336,7 +337,7 @@ def alignReferenceByPlink(old_plink,plink_version, ss, ss_type):
         ftype = " --bfile "
     #plink_call = "plink2" + ftype + old_plink  + " --not-chr X --out new_plink --ref-allele force aligner.t --make-pgen" 
     plink_call = "plink2" + ftype + old_plink  + " --not-chr X --out new_plink --ref-allele aligner.t --make-pgen" 
-    check_call(plink_call, shell = True) 
+    check_call(plink_call, shell = True)
     clean_up = "rm *.t"
     check_call(clean_up, shell = True)
     return "new_plink"
@@ -350,11 +351,16 @@ def filterAmbiguousSNPs(ss, ss_type, thresh = str(0.4)):
     #4) Remove X chromosome
     filter_list = {"AG", "AC", "AT", "TA", "TC", "TG", "GC", "GT", "GA", "CG", "CT", "CA"}
     noambig_list = {"AC", "AG", "CA", "CT", "GA", "GT", "TC", "TG"}
+    ambig_list = {"AT", "TA", "GC", "CG"}
     sizes = {"start": 0, "ambig":0, "na":0, "x":0}
     comment = {"ambig": "Ambiguous SNPs along with INDELS removed:", "na": "Variants with missing effect sizes removed:", "x": "Genes on the X chromosome removed:"}
     ss_t = None
     out_name = "noAmbig_lowfilt.ss"
     if ss_type == "TAIBO":
+        #Specify dtypes to speed up read in. Or better yet, select just the columsn we want from the get go
+        #SNP    CHR BP  A1  A2  P   BETA
+        #dtype= { "SNP":'string_',"CHR": 'category', "BETA":'float64',"P":'float64', "A1":'category', "A2":'category'}
+        #usecols = ["SNP", "CHR", "A1", "A2", "BETA", "P"]
         ss_t = pd.read_csv(ss, sep = '\t')
         sizes["start"] = ss_t.shape[0]
         ss_t["comb"] = ss_t.A1 + ss_t.A2
@@ -367,7 +373,23 @@ def filterAmbiguousSNPs(ss, ss_type, thresh = str(0.4)):
         ss_t = ss_t[ss_t.CHR != "X"]
         sizes["x"] = ss_t.shape[0]
         
-        #call_str=  '''awk  '(FNR == 1) {print $0} (($5=="A"&&$4=="C") || ($5=="A"&&$4=="G") || ($5=="C"&&$4=="A") || ($5=="C"&&$4=="T") || ($5=="G"&&$4=="A") || ($5=="G"&&$4=="T") || ($5=="T"&&$4=="C") || ($5=="T"&&$4=="G") || (($5=="A"&&$4=="T") && $4 > 0.4) || (($5=="T"&&$4=="A") && $4 > 0.4) || (($5=="G"&&$4=="C") && $4 > 0.4) || (($5=="C"&&$4=="G") && $4 > 0.4) ){print $0}' ''' + ss + " > noAmbig_lowfilt.ss" 
+    elif ss_type == "NEAL":
+        #variant    minor_allele    minor_AF    low_confidence_variant  n_complete_samples  AC  ytx beta    se  tstat   pval
+        ss_t = pd.read_csv(ss, sep = '\t')#there are ways to speed this up, consider them
+        sizes["start"] = ss_t.shape[0]
+        id_data = ss_t.variant.str.split(":", expand = True) 
+        ss_t["comb"] = id_data[2] + id_data[3]#last 2 characters at the back end of the variant
+        ss_t["CHR"] = id_data[0]
+        ss_t = ss_t[ss_t.comb.isin(filter_list)]
+        ss_t = ss_t[(ss_t.comb.isin(ambig_list) & (ss_t.minor_AF > 0.4)) | (ss_t.comb.isin(noambig_list))]
+        #remove ones that are in the ambiguous list unless they have a MAF > 0.4
+        sizes["ambig"] = ss_t.shape[0]
+        #Also remove SNPs with NA
+        ss_t = ss_t[ss_t.beta.notnull()] #here its NaN
+        sizes["na"] = ss_t.shape[0]
+        #Also remove X chromosome
+        ss_t = ss_t[ss_t.CHR != "X"]
+        sizes["x"] = ss_t.shape[0]
     else:
         call_str = "echo Nothing given"
     #call_str = call_str.replace("0.4", thresh)
@@ -382,7 +404,8 @@ def filterAmbiguousSNPs(ss, ss_type, thresh = str(0.4)):
             updateLog(comment[t], str(sizes[prev]-sizes[t]))
             prev = t
     #Write out to file
-    ss_t.to_csv(out_name, sep = '\t') 
+    ss_t = ss_t.drop("comb", axis = 1)
+    ss_t.to_csv(out_name, sep = '\t', index = False) 
     return out_name
 
 def plinkToMatrix(snp_keep, args, local_pvar, vplink):
@@ -539,7 +562,7 @@ if __name__ == '__main__':
     if args.align_ref:
         args.plink_snps = alignReferenceByPlink(args.plink_snps, args.plink_version, args.sum_stats, args.ss_format) #Make a local copy of the data with the updated genotype
         print("A new plink2 fileset with matched reference sequences has been generated", args.plink_snps)
-        input("Strand flips have been corrected for. Proceed with analysis?")
+        print("Strand flips have been corrected for. Proceeding with analysis")
         args.plink_version =2 #We have updated the type to 2
     
     
@@ -548,6 +571,7 @@ if __name__ == '__main__':
     local_pvar, geno_ids, ss_parse = prepSNPIDs(args.plink_snps, args.sum_stats,args.ss_format, args.no_ambig, args.var_in_id, args.plink_version, max_p)
     num_pat = getPatientCount(args.plink_snps, args.plink_version)
     updateLog("Number of patients detected in sample:", str(num_pat))
+    updateLog("Total number of SNPs inlucded in analysis", str(getEntryCount(geno_ids,False)))  
     print("Time for preprocessing (SNP filtering, reference alignemtn if specified, etc.", str(time.time() - start))
     print("Reading data into memory (only done on first pass)")
     #Selecting out SNPs that are likely in LD
