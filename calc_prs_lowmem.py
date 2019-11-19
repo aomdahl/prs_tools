@@ -52,9 +52,19 @@ def readInSummaryStats(s_path):
 
 def filterSumStats(pvals,ss):
     pvals_ref = dict() #dictionary containing a pointer for each p value
+    pvals.sort() #smallest one first
+    
     for p in pvals:
-        samp = ss[(ss[PVAL] <= float(p))]
+        samp = ss[(ss[PVAL] < float(p))]
         pvals_ref[p] = [samp.index.tolist(), samp[BETA].values] #Get just the pvalues and the indices.
+    """
+    #Alternative version:
+    prev = -1
+    for p in pvals:
+        samp = ss[(ss[PVAL] < float(p)) & (ss[PVAL] >= prev)]
+        pvals_ref[p] = [samp.index.tolist(), samp[BETA].values]
+        prev = float(p)
+    """
     return pvals_ref
         
 def prepSummaryStats(geno_ids, sum_path, pval_thresh):
@@ -243,10 +253,9 @@ def linearGenoParse(snp_matrix, snp_indices,pvals, scores, ss_ids):
     from operator import itemgetter
     patient_ids = list()
     report_index = 100
+    pvals.sort()
     with open(snp_matrix + ".raw", 'r') as istream:
         line_counter = 0
-        print("Reading in first line...")
-        #dat = istream.readline().strip().split()
         dat = istream.readline().split('\t')
         line_len = len(dat)
         while dat:
@@ -261,33 +270,49 @@ def linearGenoParse(snp_matrix, snp_indices,pvals, scores, ss_ids):
 
             else:
                 patient_ids.append(dat[0])
+                
                 for p in pvals:
                     snp_index = snp_indices[p][INDEX]
                     sel = var_map[snp_index]
                     try:
                         res_list = np.array(itemgetter(*sel)(dat[6:]), dtype = np.float64)
+                        scores[p].append(scoreCalculation(res_list, snp_indices[p][B])) 
+                    
                     except:
-                        print("Somehing happend....")
+                        print("Unable to read line", line_counter)
                         print(dat)
-                        input()
-                    scores[p].append(scoreCalculation(res_list, snp_indices[p][B])) 
+                        scores[p].append("NA")
                 # faster way to implement?:
                 """
-                    for p in pvals: (smallest to largest)
-                        snp_index = end_of_prev : end_of_curr
+                first_pval = True
+                rel_data = dat[6:]
+                prev_score = 0
+                new_score = 0
+                for p in pvals:
+                    if first_pval:
+                        snp_index = snp_indices[p][INDEX]
                         sel = var_map[snp_index]
-                        new_genos = np.array(itemgetter(*sel)(data[6:]), dtype = np.float64)
-                        scores[p].append(prev_score + scoreCalculation(new_genos, corresponding_betas)     
-                        #faster because only extracting each snp once instead of p times for some of them
-                        #only doing m dots instead of m + m-p + m-p2 + ....
-                """
+                        new_genos = np.array(itemgetter(*sel)(rel_data), dtype = np.float64)
+                        new_score = scoreCalculation(new_genos, snp_indices[p][B])
+                        scores[p].append(new_score)
+                        first_pval = False
+                    else:
+                        snp_index = snp_indices[p][INDEX]
+                        sel = var_map[snp_index]
+                        new_genos = np.array(itemgetter(*sel)(rel_data), dtype = np.float64)
+                        new_score = scoreCalculation(new_genos, snp_indices[p][B]) + prev_score
+                        scores[p].append(new_score)    
+                    prev_score = new_score     
+                    #faster because only extracting each snp once instead of p times for some of them
+                    #only doing m dots instead of m + m-p + m-p2 + ....
+            """ 
             try:   
                 dat = istream.readline().split('\t')
             except: #end of the file
                 dat = None
             line_counter += 1
 
-            if line_counter % report_index >= 0:
+            if line_counter % report_index == 0:
                 print("Currently at individual/sample", line_counter)
                 updateLog("Currently at individual/sample", str(line_counter))
             if len(dat) <= 1:
