@@ -19,6 +19,7 @@ from operator import itemgetter
 CHR = "chr"
 POS = "pos"
 REFID = "ref_id"
+SNP = "snp"
 EFFAL = "effect_allele"
 EFFALFREQ = "effect_allele_freq"
 BETA = "beta"
@@ -31,6 +32,7 @@ INDEX = 0
 B = 1
 VAR_IN_ID = False
 DEBUG = True        
+DEBUG_DAT = dict()
 LOG="log_file.txt"
 
 def updateLog(*prints):
@@ -123,6 +125,8 @@ def prepSNPIDs(snp_file, ss_file, ss_type, ambig, id_type, vplink = 2, max_p = 1
             #command = '''awk '(FNR == NR) {a[$1];next} (FNR == 1 && NR == 2) {next;} ($1 in a) {print $1, "N",$2,$8,$9,$10,$11}' geno_ids.f ''' + ss_file + " > ss_filt.f"   
         elif ss_type == "TAIBO": #SNP chr BP, A1 A2 P Beta --> ID ref alt beta pvalue
             command = '''awk '(FNR == NR) {a[$1];next} (FNR == 1 && NR == 2) {next;} ($1":"$5":"$4 in a && $6 <= ''' + max_p + ''' ) {print $1":"$5":"$4, $5,$4,$7,$6 }' geno_ids.f ''' + ss_file + " > ss_filt.f"
+        elif ss_type == "DEFUALT": #The kind of output we like, with a header ID ALT REF BETA SNP
+            command = '''awk '(FNR == NR) {a[$1];next} (FNR == 1 && NR == 2) {next;} ($1 in a && $4 <= ''' + max_p + ") {print $0}' geno_ids.f " + ss_file + " > ss_filt.f"
         else:
             print("The type of ss file hasn't been specified. Please specify this.")
     
@@ -243,48 +247,64 @@ def linearGenoParse(snp_matrix, snp_indices,pvals, scores, ss_ids):
         line_counter = 0
         print("Reading in first line...")
         #dat = istream.readline().strip().split()
-        dat = istream.readline().split()
+        dat = istream.readline().split('\t')
+        line_len = len(dat)
         while dat:
             if line_counter == 0:
                 var_map = buildVarMap(dat[6:], ss_ids)
+                if DEBUG:
+                   DEBUG_DAT[REFID] = dat[6:] 
                 print("Proceeding with line-by-line calculation now...")
                 for p in pvals:
                     updateLog("Number of final SNPs used at ", str(p), "pvalue level:", str(len(snp_indices[p][INDEX]))) 
                 #Need to check that this goes the way we expect.
 
             else:
-                #dat = line.split() #Oct 31 Benchmark tests (see sept2019 ProjectTracking) show its faster to do it in one line
                 patient_ids.append(dat[0])
-                #Not sure if this will work....
                 for p in pvals:
                     snp_index = snp_indices[p][INDEX]
                     sel = var_map[snp_index]
-                    #res_list = np.array(itemgetter(*sel)(dat[6:]), dtype=np.float32)
-                    res_list = np.array(itemgetter(*sel)(dat[6:]), dtype = np.float64)
+                    try:
+                        res_list = np.array(itemgetter(*sel)(dat[6:]), dtype = np.float64)
+                    except:
+                        print("Somehing happend....")
+                        print(dat)
+                        input()
                     scores[p].append(scoreCalculation(res_list, snp_indices[p][B])) 
-        #--geno removes snps with more than 10% missing from the data.pend(scoreCalculation(res_list, snp_indices[p][B])) 
+                # faster way to implement?:
+                """
+                    for p in pvals: (smallest to largest)
+                        snp_index = end_of_prev : end_of_curr
+                        sel = var_map[snp_index]
+                        new_genos = np.array(itemgetter(*sel)(data[6:]), dtype = np.float64)
+                        scores[p].append(prev_score + scoreCalculation(new_genos, corresponding_betas)     
+                        #faster because only extracting each snp once instead of p times for some of them
+                        #only doing m dots instead of m + m-p + m-p2 + ....
+                """
             try:   
-                dat = istream.readline().split()
+                dat = istream.readline().split('\t')
             except: #end of the file
                 dat = None
             line_counter += 1
-            if DEBUG:
-                debug_betas = scores.copy()
-                debug_snps = scores.copy()
-        
-            if line_counter % report_index == 0:
-                print("Currently at individual/sample", line_counter + 1)
+
+            if line_counter % report_index >= 0:
+                print("Currently at individual/sample", line_counter)
+                updateLog("Currently at individual/sample", str(line_counter))
+            if len(dat) <= 1:
+                print("Finished all the samples!")
+                break
     if DEBUG:
         print("Writing out requested debug information")
-        """ NOt updated for new version
+        DEBUG_DAT[BETA] = dict()
+        DEBUG_DAT[SNP] = dict()
         for p in pvals:
             snp_index = snp_indices[p][INDEX]
             sel = var_map[snp_index] 
-            res_list = np.array((itemgetter(*sel)(line)))
-            debug_betas[p] = snp_indices[p][B]
-            debug_snps[p] = [ loci[s].name for s in sel ]
-        return scores, patient_ids, [debug_snps, debug_betas] #basically a pval:[list of snps]  
-        """
+            #debug_betas[p] = snp_indices[p][B]
+            #debug_snps[p] = sel #just the ids, not the names....
+            DEBUG_DAT[BETA][p] = snp_indices[p][B]
+            DEBUG_DAT[SNP][p] = ((itemgetter(*sel)(DEBUG_DAT[REFID])))
+    return scores, patient_ids, DEBUG_DAT #basically a pval:[list of snps]  
     if line_counter == 1:
         print("There appears to be some error with the genotype plink matrix. Please ensure the genotype data is correct or the plink call was not interrupted.")
         sys.exit()
@@ -329,6 +349,9 @@ def alignReferenceByPlink(old_plink,plink_version, ss, ss_type):
         #ID CHR BP A1(effect) A2 P BETA
         quick_call = "awk ' ( NR > 1) {print $1,$5}' " + ss + " | uniq > ./aligner.t"
         check_call(quick_call, shell = True) 
+    elif ss_type == "DEFAULT": #ID REf ALT BETA Pvalue
+        call = "cut -f 1,2 | uniq > aligner.t"
+        check_call(call)
     else:
         print("Have not extended the method for type", ss_type, ". Please align Reference information manually")
         sys.exit()
@@ -336,7 +359,7 @@ def alignReferenceByPlink(old_plink,plink_version, ss, ss_type):
     if plink_version == 1:
         ftype = " --bfile "
     #plink_call = "plink2" + ftype + old_plink  + " --not-chr X --out new_plink --ref-allele force aligner.t --make-pgen" 
-    plink_call = "plink2" + ftype + old_plink  + " --not-chr X --out new_plink --ref-allele aligner.t --make-pgen" 
+    plink_call = "plink2" + ftype + old_plink  + " --not-chr X --out new_plink --ref-allele aligner.t --make-pgen --max-alleles 2" 
     check_call(plink_call, shell = True)
     clean_up = "rm *.t"
     check_call(clean_up, shell = True)
@@ -345,15 +368,17 @@ def alignReferenceByPlink(old_plink,plink_version, ss, ss_type):
 def filterAmbiguousSNPs(ss, ss_type, thresh = str(0.4)):
     #okay, I'm biting the bullet and reading it in...
     #there are 4 stages:
+    #0) Remove anything more than bi-allelic
     #1) Limit it to SNPs only
     #2) Limit to nonambiguous SNPs, if possible
     #3) Remove null beta values
     #4) Remove X chromosome
+    #5) Write it out in the default format so its easier to digest downstream. (
     filter_list = {"AG", "AC", "AT", "TA", "TC", "TG", "GC", "GT", "GA", "CG", "CT", "CA"}
     noambig_list = {"AC", "AG", "CA", "CT", "GA", "GT", "TC", "TG"}
     ambig_list = {"AT", "TA", "GC", "CG"}
-    sizes = {"start": 0, "ambig":0, "na":0, "x":0}
-    comment = {"ambig": "Ambiguous SNPs along with INDELS removed:", "na": "Variants with missing effect sizes removed:", "x": "Genes on the X chromosome removed:"}
+    sizes = {"start": 0,"non_bi": 0, "ambig":0, "na":0, "x":0}
+    comment = {"ambig": "Ambiguous SNPs along with INDELS removed:", "na": "Variants with missing effect sizes removed:", "x": "Genes on the X chromosome removed:", "non_bi": "Non-biallelic SNPs removed:"}
     ss_t = None
     out_name = "noAmbig_lowfilt.ss"
     if ss_type == "TAIBO":
@@ -363,7 +388,11 @@ def filterAmbiguousSNPs(ss, ss_type, thresh = str(0.4)):
         #usecols = ["SNP", "CHR", "A1", "A2", "BETA", "P"]
         ss_t = pd.read_csv(ss, sep = '\t')
         sizes["start"] = ss_t.shape[0]
-        ss_t["comb"] = ss_t.A1 + ss_t.A2
+        #Remove non-biallelic snps
+        s_t.drop_duplicates(subset = "SNP", keep = False, inplace = True)  
+        sizes["non_bi"] = ss_t.shape[0]
+        #Remove ambiguous SNPs
+        ss_t["comb"] = ss_t.A1 + ss_t.A2 
         ss_t = ss_t[ss_t.comb.isin(noambig_list)]
         sizes["ambig"] = ss_t.shape[0]
         #Also remove SNPs with NA
@@ -372,14 +401,23 @@ def filterAmbiguousSNPs(ss, ss_type, thresh = str(0.4)):
         #Also remove X chromosome
         ss_t = ss_t[ss_t.CHR != "X"]
         sizes["x"] = ss_t.shape[0]
-        
+        ss_t["ID"] = ss_t.SNP + ":" + ss_t.A2 + ":" + ss_t.A1
+        ss_t.rename(columns = {"BETA":BETA, "P":PVAL, "A2":REF, "A1":ALT}, inplace = True)
+        ss_t = ss_t["ID", REF, ALT, BETA, PVAL]    
     elif ss_type == "NEAL":
+        #usecols= ["variant", "beta", "pval"]
+        #dtype = {"variant": 'string_', "beta":'float64', "pval":'float64'} 
         #variant    minor_allele    minor_AF    low_confidence_variant  n_complete_samples  AC  ytx beta    se  tstat   pval
         ss_t = pd.read_csv(ss, sep = '\t')#there are ways to speed this up, consider them
         sizes["start"] = ss_t.shape[0]
         id_data = ss_t.variant.str.split(":", expand = True) 
         ss_t["comb"] = id_data[2] + id_data[3]#last 2 characters at the back end of the variant
         ss_t["CHR"] = id_data[0]
+        ss_t["loc"] = id_data[0] + ":" + id_data[1]
+        #Removing non_bi-allelic SNPs
+        ss_t.drop_duplicates(subset = "loc", keep = False, inplace = True)
+        sizes["non_bi"] = ss_t.shape[0]
+        #Removing ambiguous SNPs
         ss_t = ss_t[ss_t.comb.isin(filter_list)]
         ss_t = ss_t[(ss_t.comb.isin(ambig_list) & (ss_t.minor_AF > 0.4)) | (ss_t.comb.isin(noambig_list))]
         #remove ones that are in the ambiguous list unless they have a MAF > 0.4
@@ -390,6 +428,11 @@ def filterAmbiguousSNPs(ss, ss_type, thresh = str(0.4)):
         #Also remove X chromosome
         ss_t = ss_t[ss_t.CHR != "X"]
         sizes["x"] = ss_t.shape[0]
+        #Set it up for write_out ID, ref, alt, beta, pval
+        ss_t.rename(columns = {"variant":"ID", "beta":BETA, "pval":PVAL}, inplace = True)
+        ss_t[REF] = id_data[2]
+        ss_t[ALT] = id_data[3]
+        ss_t = ss_t["ID", REF, ALT, BETA,PVAL]
     else:
         call_str = "echo Nothing given"
     #call_str = call_str.replace("0.4", thresh)
@@ -403,7 +446,7 @@ def filterAmbiguousSNPs(ss, ss_type, thresh = str(0.4)):
         else:
             updateLog(comment[t], str(sizes[prev]-sizes[t]))
             prev = t
-    #Write out to file
+    #Write out to file #ID, ref, alt, beta, pvalue
     ss_t = ss_t.drop("comb", axis = 1)
     ss_t.to_csv(out_name, sep = '\t', index = False) 
     return out_name
@@ -543,6 +586,7 @@ if __name__ == '__main__':
     parser.add_argument("--clump_ref", help = "Specify this option if you wish to perform clumping and already have a plink clump file produced (the output of plink1.9 with the --clump-best argument). Provide the path to this file.", default = "NA")
     parser.add_argument("-pv", "--plink_version", default = 2, help = "Specify which version of plink files you are using for the reference data.", type = int, choices = [1,2])
     parser.add_argument("--align_ref", action = "store_true", help = "Specify this if you would like us to align the reference alleles between the target and training data. If this is already done, we recommend omitting this flag since it will create an additional copy of the genotype data.")
+    parser.add_argument("--only_preprocess", action = "store_true", help = "Specify this option if you would like to terminate once preprocessing of SNPs (including aligning reference, removing ambiguous SNPs, preparing summary stat sublist) has completed.")
     args = parser.parse_args()
     pvals = [args.pval]
     DEBUG = args.debug
@@ -555,9 +599,12 @@ if __name__ == '__main__':
     #there are ways to improve this....
     if args.preprocessing_done:
         print("Preprocessing has already been completed. Proceeding with PRS calculations...")
+        #Unload everything in the pickle, which contains the path information for everything:
+            #The snp_indices data, the snp_matrix path
     if not args.no_ambig:
         print("Ambiguous SNPs and indels have not been filtered out from SS data. Filtering now...")
         args.sum_stats = filterAmbiguousSNPs(args.sum_stats, args.ss_format)
+        args.ss_format = "DEFAULT" #ID REF ALT BETA PVAL
         print("Ambiguous SNPs and indels removed. New file is", args.sum_stats)
     if args.align_ref:
         args.plink_snps = alignReferenceByPlink(args.plink_snps, args.plink_version, args.sum_stats, args.ss_format) #Make a local copy of the data with the updated genotype
@@ -565,19 +612,22 @@ if __name__ == '__main__':
         print("Strand flips have been corrected for. Proceeding with analysis")
         args.plink_version =2 #We have updated the type to 2
     
-    
     print("Selecting IDs for analysis...")
     max_p = max(pvals)
     local_pvar, geno_ids, ss_parse = prepSNPIDs(args.plink_snps, args.sum_stats,args.ss_format, args.no_ambig, args.var_in_id, args.plink_version, max_p)
     num_pat = getPatientCount(args.plink_snps, args.plink_version)
     updateLog("Number of patients detected in sample:", str(num_pat))
-    updateLog("Total number of SNPs inlucded in analysis", str(getEntryCount(geno_ids,False)))  
-    print("Time for preprocessing (SNP filtering, reference alignemtn if specified, etc.", str(time.time() - start))
+    updateLog("Total number of SNPs included in analysis", str(getEntryCount(geno_ids,False)))  
+    print("Time for preprocessing (SNP filtering, reference alignment if specified, etc.", str(time.time() - start))
     print("Reading data into memory (only done on first pass)")
     #Selecting out SNPs that are likely in LD
     #at this point, the geno ids and ss parse list  has what we want. We will reduce it more though through clumping via plink.
     if args.clump:
         ss_parse, geno_ids = plinkClump(args.ld_ref, args.clump_ref, geno_ids, ss_parse)
+    if args.only_preprocess:
+        print("Preprocessing complete")
+        sys.exit()
+   
     stats_complete = readInSummaryStats(ss_parse)
     snp_indices = filterSumStats(pvals,stats_complete)
     #time for benchmarking
@@ -586,8 +636,8 @@ if __name__ == '__main__':
     scores, patient_ids, debug_dat = calculatePRS(pvals, snp_matrix, snp_indices,stats_complete[REFID])
     writeScores(scores, patient_ids, args.output + ".tsv")
     if DEBUG:
-        writeScoresDebug(debug_dat[0], "debug_vals_snps.tsv")
-        writeScoresDebug(debug_dat[1], "debug_vals_betas.tsv")
+        writeScoresDebug(debug_dat[SNP], "debug_vals_snps.tsv")
+        writeScoresDebug(debug_dat[BETA], "debug_vals_betas.tsv")
     #Match SNPs by address and/or reference ID.
     print("Scores written out to ", args.output + ".tsv")
     stop = time.time()
