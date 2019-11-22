@@ -30,7 +30,7 @@ REF= "REF" #reference allele
 ALT = "ALT" #Alternate allele
 INDEX = 0
 B = 1
-VAR_IN_ID = False
+VAR_IN_ID = True #Variants are included in ID, assumed by default
 DEBUG = True        
 DEBUG_DAT = dict()
 LOG="log_file.txt"
@@ -44,16 +44,13 @@ def updateLog(*prints):
 def readInSummaryStats(s_path):
     #ID, ref, alt, beta, pvalue. Th
     ss = pd.read_csv(s_path, sep = ' ', header = None,  names = [REFID, REF,ALT, BETA, PVAL], dtype= { REF:'category',ALT: 'category', BETA:'float64', PVAL:'float64', SEBETA:'float64', TSTAT:'float64'})
-    #ss = pd.read_csv(s_path, sep = ' ', header = None,  names = [REFID, REF,ALT, BETA,SEBETA,TSTAT, PVAL], dtype= { REF:'category',ALT: 'category', BETA:'float64', PVAL:'float64', SEBETA:'float64', TSTAT:'float64'})
     print("Data in memory...")
-    #ss.info(memory_usage='deep') 
-    
     return ss
 
 def filterSumStats(pvals,ss):
     pvals_ref = dict() #dictionary containing a pointer for each p value
     pvals.sort() #smallest one first
-    
+    """ 
     for p in pvals:
         samp = ss[(ss[PVAL] < float(p))]
         pvals_ref[p] = [samp.index.tolist(), samp[BETA].values] #Get just the pvalues and the indices.
@@ -64,7 +61,7 @@ def filterSumStats(pvals,ss):
         samp = ss[(ss[PVAL] < float(p)) & (ss[PVAL] >= prev)]
         pvals_ref[p] = [samp.index.tolist(), samp[BETA].values]
         prev = float(p)
-    """
+ 
     return pvals_ref
         
 def prepSummaryStats(geno_ids, sum_path, pval_thresh):
@@ -81,71 +78,61 @@ def prepSummaryStats(geno_ids, sum_path, pval_thresh):
     return "ss.tmp", "ss_ids.tmp"
 
 #This will extract the ids we want to be working with.
-def prepSNPIDs(snp_file, ss_file, ss_type, ambig, id_type, vplink = 2, max_p = 1):
+#(args.plink_snps, args.sum_stats,args.ss_format, vplink = args.plink_version, max_p = max(pvals))
+def prepSNPIDs(snp_file, ss_file, ss_type, vplink = 2, max_p = 1):
     """
     This extracts all the IDs from the genotype data (pvar file) that we wish to be using and selects just the data from the summary stats data we want
     @return path to the genotype ids
     @return path to the summary stats.
     """
-    local_geno = snp_file + ".pvar"
-    max_p = str(max_p)
-    if id_type:
-        local_geno = "local_geno.pvar" #We will be making our own pvar
-        if vplink == 1:
-            local_geno = "local_geno.bim"
-
-    #Remove all the header lines, just get what we need.
-    if not os.path.isfile('geno_ids.f'):
-        #Step 1: format the PVAR file to have the IDs as we wouldl like them
-        #TODO: update id_type flag to bypass this step if not necessary.
-        #By default, assume the IDs are in the right way.
-        command = '''awk '(!/##/) {print $1"\t"$2"\t"$3"\t"$4"\t"$5}' ''' + snp_file + ".pvar  > local_geno.pvar"
-        #Simplifying things, we aren't going to re-write IDs....
-        if id_type: #This argument means the IDs in the genotype data are NOT as we wish them to be. Need to modify 
-            command = ''' awk '(!/##/ && /#/) {print $1"\t"$2"\tID\t"$4"\t"$5} (!/#/) {print $1"\t"$2"\t"$1":"$2":"$4":"$5"\t"$4"\t"$5}' ''' + snp_file + ".pvar > local_geno.pvar"
+    #Report the number of snps in the genotype file for log file
+    if vplink == 2:
+        local_geno = snp_file + ".pvar"
+        updateLog("Number of variants detected in original genotype file", str(getEntryCount(snp_file + ".pvar", True)))
+    else: #vplink == 1:
+        local_geno = snp_file + ".bim"
+        updateLog("Number of variants detected in original genotype file", str(getEntryCount(local_geno, False)))
+    geno_id_list = "geno_ids.f"
+    inter_sum_stats = "ss_filt.f" #Intersected summary stats with genotype ids
+    #If we have already generated our geno_id_list,skip this tep 
+    if not os.path.isfile(geno_id_list): #If we've already done this step, no point in doing more work....   
+        if not VAR_IN_ID: #need to rework the IDs so they are chr:pos:ref:alt
+            local_geno = "local_geno.pvar" #We will be making our own pvar
+            command = ''' awk '(!/##/ && /#/) {print $1"\t"$2"\tID\t"$4"\t"$5} (!/#/) {print $1"\t"$2"\t"$1":"$2":"$4":"$5"\t"$4"\t"$5}' ''' + snp_file + ".pvar > " + local_geno
             if vplink == 1:
-                #Note that this puts the allele in chr:num:minor:major
-                command = '''awk '{print $1"\t"$1":"$4":"$5":"$6"\t"$3"\t"$4"\t"$5"\t"$6}' ''' + snp_file + ".bim > local_geno.bim"
-                updateLog("Number of variants detected in original genotype file", str(getEntryCount(snp_file + ".bim", False)))
-            else:
-                updateLog("Number of variants detected in original genotype file", str(getEntryCount(snp_file + ".pvar", True)))
-        try:
-            check_call(command, shell = True)
-        except subprocess.CalledProcessError:
-            print("Unable to generate modified pvar/bim file. Are you sure you specified the correct plink version?")
-            print("Failed on command", command)
-            sys.exit()
-        #Step 2: Generate file of the IDs from genotype data for filtering of the summary statistics
+                local_geno = "local_geno.bim"
+                command = '''awk '{print $1"\t"$1":"$4":"$5":"$6"\t"$3"\t"$4"\t"$5"\t"$6}' ''' + snp_file + ".bim > " local_geno
+            try:
+                check_cll(command, shell = True)
+            except subprocess.CalledProcessError:
+                print("Unable to generate modified pvar/bim file. Are you sure you specified the correct plink version?")
+                print("Failed on command", command)
+                sys.exit()
         if vplink == 2:
-            command_n = "awk ' (NR> 1 && $1 !~ /X/) {print $3}'  local_geno.pvar > geno_ids.f"
+            command_n = "awk ' (NR> 1 && $1 !~ /X/) {print $3}' > " + geno_id_list
         else:
-            command_n = "awk ' ($1 !~ /X/) {print $2}'  local_geno.bim > geno_ids.f"
+            command_n = "awk ' ($1 !~ /X/) {print $2}'  local_geno.bim > " + geno_id_list
         check_call(command_n, shell = True)
-    if not os.path.isfile("ss_filt.f"):
-        #Note that for all types, we expect IDs to be of the form chr:#:ref:alt
-        #CHANGE on 10-22: only outputing the pare minimum, ID, ref, alt, beta, pvalue. The rest isn't needed
-        #In cases where the REF and ALT alleles are not specified, it is ID, major, minor/effect, beta, pvalue
-        #11/14- adding functionality to filter out SNPs from our max p-value and below at this point.
+
+    if not os.path.isfile(inter_sum_stats):
+        write_out = geno_id_list + " " + ss_file + " > " + inter_sum_stats
         if ss_type == "SAIGE":
             #ID, REF, ALT, BETA, SEBETA, Tstat, pval
-             command = '''awk '(FNR == NR) {a[$1];next} (FNR == 1 && NR == 2) {next;} ($3 in a && $13 <= ''' + max_p + ''' ) {print $3, $4,$5,$10, $13}' geno_ids.f ''' + ss_file + " > ss_filt.f"  
-            #command = '''awk '(FNR == NR) {a[$1];next} (FNR == 1 && NR == 2) {next;} ($3 in a) {print $3, $4,$5,$10,$11,$12,$13}' geno_ids.f ''' + ss_file + " > ss_filt.f"  
+             command = '''awk '(FNR==NR) {a[$1];next} (FNR == 1 && NR == 2) {next;} ($3 in a && $13 <= ''' + max_p + " ) {print $3, $4,$5,$10, $13}' " + write_out 
         elif ss_type == "NEAL":
-            command = '''awk '(FNR == NR) {a[$1];next} (FNR == 1 && NR == 2) {next;} ($1 in a && $11 <= ''' + max_p + ''' ) {print $1, "N",$2,$8,$11}' geno_ids.f ''' + ss_file + " > ss_filt.f"    
-            #command = '''awk '(FNR == NR) {a[$1];next} (FNR == 1 && NR == 2) {next;} ($1 in a) {print $1, "N",$2,$8,$9,$10,$11}' geno_ids.f ''' + ss_file + " > ss_filt.f"   
-        elif ss_type == "TAIBO": #SNP chr BP, A1 A2 P Beta --> ID ref alt beta pvalue
-            command = '''awk '(FNR == NR) {a[$1];next} (FNR == 1 && NR == 2) {next;} ($1":"$5":"$4 in a && $6 <= ''' + max_p + ''' ) {print $1":"$5":"$4, $5,$4,$7,$6 }' geno_ids.f ''' + ss_file + " > ss_filt.f"
+            command = '''awk '(FNR==NR) {a[$1];next} (FNR == 1 && NR == 2) {next;} ($1 in a && $11 <= ''' + max_p + ''' ) {print $1, "N",$2,$8,$11}' ''' + write_out 
+        elif ss_type == "HELIX": #SNP chr BP, A1 A2 P Beta --> ID ref alt beta pvalue
+            command = '''awk '(FNR==NR) {a[$1];next} (FNR == 1 && NR == 2) {next;} ($1":"$5":"$4 in a && $6 <= ''' + max_p + ''' ) {print $1":"$5":"$4, $5,$4,$7,$6 }' ''' + write_out
         elif ss_type == "DEFUALT": #The kind of output we like, with a header ID ALT REF BETA SNP
-            command = '''awk '(FNR == NR) {a[$1];next} (FNR == 1 && NR == 2) {next;} ($1 in a && $4 <= ''' + max_p + ") {print $0}' geno_ids.f " + ss_file + " > ss_filt.f"
+            command = '''awk '(FNR==NR) {a[$1];next} (FNR == 1 && NR == 2) {next;} ($1 in a && $4 <= ''' + max_p + ") {print $0}' " + write_out
         else:
             print("The type of ss file hasn't been specified. Please specify this.")
-    
-        #command = '''awk '(FNR == 1) {next;} {print $1":"$2, $4,$5,$10,$11,$12,$13}' ''' + ss_file + " > ss_filt.f"
+        input(command)
         check_call(command, shell = True)
         #reset the ids we use downstream
-        command = "cut -f 1 -d ' ' ss_filt.f > geno_ids.f"
+        command = "cut -f 1 -d ' ' " + inter_sum_stats + " > " + geno_id_list
         check_call(command, shell = True)
-    return local_geno,"geno_ids.f", "ss_filt.f"
+    return local_geno, geno_id_list, inter_sum_stats
 
 def getEntryCount(fin, header):
     if header:
@@ -270,7 +257,7 @@ def linearGenoParse(snp_matrix, snp_indices,pvals, scores, ss_ids):
 
             else:
                 patient_ids.append(dat[0])
-                
+                 
                 for p in pvals:
                     snp_index = snp_indices[p][INDEX]
                     sel = var_map[snp_index]
@@ -305,7 +292,7 @@ def linearGenoParse(snp_matrix, snp_indices,pvals, scores, ss_ids):
                     prev_score = new_score     
                     #faster because only extracting each snp once instead of p times for some of them
                     #only doing m dots instead of m + m-p + m-p2 + ....
-            """ 
+                """
             try:   
                 dat = istream.readline().split('\t')
             except: #end of the file
@@ -355,8 +342,10 @@ def sameAlleleAssesment(s1, s2):
         return False
 
 def alignReferenceByPlink(old_plink,plink_version, ss, ss_type):
+    """
     #Make the reference file with major 
     #get the reference information you want
+    """
     print("Correcting for strand flips")
     if ss_type == "SAIGE":
         first = '''awk '(NR >1) {print $1":"$2"\t"$4} ' ''' + ss + " | uniq > aligner.t"
@@ -370,7 +359,7 @@ def alignReferenceByPlink(old_plink,plink_version, ss, ss_type):
         check_call(first, shell = True)
         check_call(second, shell = True)
         check_call(final, shell = True)
-    elif ss_type == "TAIBO":
+    elif ss_type == "HELIX":
         #ID CHR BP A1(effect) A2 P BETA
         quick_call = "awk ' ( NR > 1) {print $1,$5}' " + ss + " | uniq > ./aligner.t"
         check_call(quick_call, shell = True) 
@@ -383,30 +372,30 @@ def alignReferenceByPlink(old_plink,plink_version, ss, ss_type):
     ftype = " --pfile "
     if plink_version == 1:
         ftype = " --bfile "
-    #plink_call = "plink2" + ftype + old_plink  + " --not-chr X --out new_plink --ref-allele force aligner.t --make-pgen" 
     plink_call = "plink2" + ftype + old_plink  + " --not-chr X --out new_plink --ref-allele aligner.t --make-pgen --max-alleles 2" 
     check_call(plink_call, shell = True)
-    clean_up = "rm *.t"
+    clean_up = "rm aligner.t"
     check_call(clean_up, shell = True)
     return "new_plink"
 
-def filterAmbiguousSNPs(ss, ss_type, thresh = str(0.4)):
-    #okay, I'm biting the bullet and reading it in...
-    #there are 4 stages:
-    #0) Remove anything more than bi-allelic
-    #1) Limit it to SNPs only
-    #2) Limit to nonambiguous SNPs, if possible
-    #3) Remove null beta values
-    #4) Remove X chromosome
-    #5) Write it out in the default format so its easier to digest downstream. (
+def filterSumStatSNPs(ss, ss_type):
+    """
+    Filters summary statistics based on the specified file type, as follows:
+    1) Remove anything more than bi-allelic
+    2) Limit it to SNPs only
+    3) Limit to nonambiguous SNPs, if possible keep ambiguous snps MAF > 0.4
+    4) Remove null beta values
+    5) Remove X chromosome snps
+    6) Write it out in the default format so its easier to digest downstream. (ID REF ALT BETA PVAL), ID standardized to chr:pos:ref:alt
+    """
     filter_list = {"AG", "AC", "AT", "TA", "TC", "TG", "GC", "GT", "GA", "CG", "CT", "CA"}
     noambig_list = {"AC", "AG", "CA", "CT", "GA", "GT", "TC", "TG"}
     ambig_list = {"AT", "TA", "GC", "CG"}
     sizes = {"start": 0,"non_bi": 0, "ambig":0, "na":0, "x":0}
     comment = {"ambig": "Ambiguous SNPs along with INDELS removed:", "na": "Variants with missing effect sizes removed:", "x": "Genes on the X chromosome removed:", "non_bi": "Non-biallelic SNPs removed:"}
     ss_t = None
-    out_name = "noAmbig_lowfilt.ss"
-    if ss_type == "TAIBO":
+    out_name = "filtered_" + ss_type + ".ss"
+    if ss_type == "HELIX":
         #Specify dtypes to speed up read in. Or better yet, select just the columsn we want from the get go
         #SNP    CHR BP  A1  A2  P   BETA
         #dtype= { "SNP":'string_',"CHR": 'category', "BETA":'float64',"P":'float64', "A1":'category', "A2":'category'}
@@ -430,12 +419,10 @@ def filterAmbiguousSNPs(ss, ss_type, thresh = str(0.4)):
         ss_t.rename(columns = {"BETA":BETA, "P":PVAL, "A2":REF, "A1":ALT}, inplace = True)
         ss_t = ss_t["ID", REF, ALT, BETA, PVAL]    
     elif ss_type == "NEAL":
-        #usecols= ["variant", "beta", "pval"]
-        #dtype = {"variant": 'string_', "beta":'float64', "pval":'float64'} 
         #variant    minor_allele    minor_AF    low_confidence_variant  n_complete_samples  AC  ytx beta    se  tstat   pval
-        ss_t = pd.read_csv(ss, sep = '\t')#there are ways to speed this up, consider them
+        ss_t = pd.read_csv(ss, sep = '\t',usecols = ["variant", "beta", "pval", "minor_AF"], dtype = {"variant": 'string_', "beta":'float64', "pval":'float64', "minor_AF":"float64"}
         sizes["start"] = ss_t.shape[0]
-        id_data = ss_t.variant.str.split(":", expand = True) 
+        id_data = ss_t.variant.str.split(":", expand = True)  #gives chr:pos:ref:alt
         ss_t["comb"] = id_data[2] + id_data[3]#last 2 characters at the back end of the variant
         ss_t["CHR"] = id_data[0]
         ss_t["loc"] = id_data[0] + ":" + id_data[1]
@@ -460,12 +447,10 @@ def filterAmbiguousSNPs(ss, ss_type, thresh = str(0.4)):
         ss_t = ss_t["ID", REF, ALT, BETA,PVAL]
     else:
         call_str = "echo Nothing given"
-    #call_str = call_str.replace("0.4", thresh)
-    #check_call(call_str, shell = True)
     end_size = ss_t.shape[0]
+    #Write size changes out to log file
     prev = "start"
     for t in sizes:
-
         if t == "start":
             updateLog(str(sizes[t]) + " variants submitted in summary statistics file.")
         else:
@@ -508,6 +493,7 @@ def plinkClump(reference_ld, clump_ref, geno_ids, ss):
     Run plink and clump, get the new list of ids.
     Select just these from the summary statistics.
     """
+    pre_clump_count = getEntryCount(geno_ids, False)
     if clump_ref == "NA":
         #Build the file for plink to run on 
         command = "echo SNP P > clump_ids.tmp"
@@ -528,6 +514,9 @@ def plinkClump(reference_ld, clump_ref, geno_ids, ss):
     #command = "awk '(FNR == NR) {a[$1];next} ($1 in a) {print $1}' " + clump_ref + " " + geno_ids + " > t && mv t " + geno_ids
     command = "cut -f 1 -d ' ' " + ss +" > " + geno_ids
     check_call(command, shell = True)
+    #Log reporting
+    post_clump_count = getEntryCount(geno_ids, False)
+    updateLog("Number of SNPs removed by clumping (selecting only top clump variant):", str(pre_clump_count - post_clump_count)) 
     return ss, geno_ids
     
 
@@ -598,13 +587,13 @@ if __name__ == '__main__':
     parser.add_argument("-snps", "--plink_snps", help = "Plink file handle for actual SNP data (omit the .extension portion)")
     parser.add_argument("--preprocessing_done", help = "Specify this if you have already run the first steps and generated the plink2 matrix with matching IDs. Mostly for development purposes.")
     parser.add_argument("-ss", "--sum_stats", help = "Path to summary stats file. Be sure to specify format if its not DEFAULT. Assumes tab delimited", required = True)
-    parser.add_argument("--ss_format", help = "Format of the summary statistics", default = "SAIGE", choices = ["DEFAULT", "SAIGE", "NEAL", "TAIBO"])
+    parser.add_argument("--ss_format", help = "Format of the summary statistics", default = "SAIGE", choices = ["DEFAULT", "SAIGE", "NEAL", "HELIX"])
     parser.add_argument("-p", "--pval", default = 5e-8, type = float, help = "Specify what pvalue threshold to use.")
     parser.add_argument("--pvals", help= "Use this if you wish to specify multiple at once, in a list separated by commas")
     parser.add_argument("--maf", default = 0.01, type = float, help = "Specify what MAF cutoff to use.")
     parser.add_argument("-o", "--output", default = "./prs_" + str(date.today()), help = "Specify where you would like the output file to be written and its prefix.")
-    parser.add_argument("--no_ambig", default = False, action = "store_true", help = "Specify this option if you have already filter for ambiguous SNPs and bi-alleleic variants. Recommended for speed.")
-    parser.add_argument("--var_in_id", action = "store_true", help = "Specify this if you wish to use more specific id of the format chr:loc:ref:alt. For default SNP in file, just leave this.")
+    parser.add_argument("--pre_filtered_ss", default = False, action = "store_true", help = "Specify this option if you have already filter summary stats for ambiguous SNPs, bi-alleleic variants, NAs. Recommended for speed.")
+    parser.add_argument("--reset_ids", action = "store_true", help = "By default, program assumes genotype ids are in the form chr:loc:ref:alt. Specify this argument if this is NOT the case to.")
     parser.add_argument("--clump", help = "Specify if you wish to do clumping. DEfault threshold is 0.5", action = "store_true", required = "--ld_ref" in sys.argv or "--clump_ref" in sys.argv)
     parser.add_argument("--ld_ref", help = "Specify an LD reference panel, required if you want to do clumping. Pass in plink1.9 format please.")
     parser.add_argument("--debug", help = "Specify this if you wish to output debug results", default = False, action = "store_true")
@@ -616,19 +605,22 @@ if __name__ == '__main__':
     pvals = [args.pval]
     DEBUG = args.debug
     start = time.time()    
+    #Extract the pvalues to asses at
     if args.pvals:
         pvals = [float(x) for x in (args.pvals).split(",")]
         updateLog("Pvals to asses:", str(args.pvals))
-    if args.var_in_id:
-        VAR_IN_ID = True
-    #there are ways to improve this....
+    if args.reset_ids:
+        VAR_IN_ID = False #Variant information is not included in genotype id
+    #CHeck to see if preprocessing, including filtering of ambiguous snps, etc. has already been done.
+    #Set this up to jump aghead
     if args.preprocessing_done:
         print("Preprocessing has already been completed. Proceeding with PRS calculations...")
+        print("Not implemented error, will run as normal")
         #Unload everything in the pickle, which contains the path information for everything:
             #The snp_indices data, the snp_matrix path
-    if not args.no_ambig:
+    if not args.pre_filtered_ss:
         print("Ambiguous SNPs and indels have not been filtered out from SS data. Filtering now...")
-        args.sum_stats = filterAmbiguousSNPs(args.sum_stats, args.ss_format)
+        args.sum_stats = filterSumStatSNPs(args.sum_stats, args.ss_format)
         args.ss_format = "DEFAULT" #ID REF ALT BETA PVAL
         print("Ambiguous SNPs and indels removed. New file is", args.sum_stats)
     if args.align_ref:
@@ -638,21 +630,18 @@ if __name__ == '__main__':
         args.plink_version =2 #We have updated the type to 2
     
     print("Selecting IDs for analysis...")
-    max_p = max(pvals)
-    local_pvar, geno_ids, ss_parse = prepSNPIDs(args.plink_snps, args.sum_stats,args.ss_format, args.no_ambig, args.var_in_id, args.plink_version, max_p)
+    local_pvar, geno_ids, ss_parse = prepSNPIDs(args.plink_snps, args.sum_stats,args.ss_format, vplink = args.plink_version, max_p = max(pvals))
     num_pat = getPatientCount(args.plink_snps, args.plink_version)
     updateLog("Number of patients detected in sample:", str(num_pat))
-    updateLog("Total number of SNPs included in analysis", str(getEntryCount(geno_ids,False)))  
     print("Time for preprocessing (SNP filtering, reference alignment if specified, etc.", str(time.time() - start))
     print("Reading data into memory (only done on first pass)")
-    #Selecting out SNPs that are likely in LD
-    #at this point, the geno ids and ss parse list  has what we want. We will reduce it more though through clumping via plink.
     if args.clump:
         ss_parse, geno_ids = plinkClump(args.ld_ref, args.clump_ref, geno_ids, ss_parse)
+    print("Preprocessing complete")
     if args.only_preprocess:
-        print("Preprocessing complete")
         sys.exit()
-   
+    
+    updateLog("Total number of SNPs included in analysis", str(getEntryCount(geno_ids,False)))  
     stats_complete = readInSummaryStats(ss_parse)
     snp_indices = filterSumStats(pvals,stats_complete)
     #time for benchmarking
