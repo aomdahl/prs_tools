@@ -56,16 +56,17 @@ def indexSSByPval(pvals,ss):
     """
     pvals_ref = dict() #dictionary containing a pointer for each p value
     pvals.sort() #smallest one first
+    """
     for p in pvals:
         samp = ss[(ss[PVAL] <= float(p))]
         pvals_ref[p] = [samp.index.values.tolist(), samp[BETA].values]      
     """
     prev = -1
     for p in pvals:
-        samp = ss[(ss[PVAL] < float(p)) & (ss[PVAL] >= prev)]
+        samp = ss[(ss[PVAL] <= float(p)) & (ss[PVAL] > prev)]
         pvals_ref[p] = [samp.index.tolist(), samp[BETA].values]
         prev = float(p) 
-    """
+    
     return pvals_ref
         
 def prepSummaryStats(geno_ids, sum_path, pval_thresh):
@@ -273,7 +274,7 @@ def linearGenoParse(snp_matrix, snp_indices,pvals, scores, ss_ids):
             
             else:
                 patient_ids.append(dat[0])
-                """
+                
                 first_pval = True
                 rel_data = dat[6:]
                 prev_score = 0
@@ -290,7 +291,7 @@ def linearGenoParse(snp_matrix, snp_indices,pvals, scores, ss_ids):
                     else:
                         new_score = scoreCalculation(new_genos, snp_indices[p][B]) + prev_score
                         scores[p].append(new_score)
-                        print(new_score)    
+                        updateLog(str(patient_ids[-1]), str(new_score))
                     prev_score = new_score     
                 """
                 for p in pvals:
@@ -307,6 +308,7 @@ def linearGenoParse(snp_matrix, snp_indices,pvals, scores, ss_ids):
                         print("Unable to read line", line_counter)
                         print(dat)
                         input()
+                """
             try:   
                 dat = istream.readline().split('\t')
             except: #end of the file
