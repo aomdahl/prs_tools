@@ -531,7 +531,7 @@ def plinkToMatrix(snp_keep, args, local_pvar, vplink):
 #TODO- you can do this once with the 1000 genomes cohort and then just repeat with that list of "best" genes.
 #Doesn't need to be done denovo every time!
 #TODO: fix the id system for clumping, make sure consisent
-def plinkClump(reference_ld, clump_ref, geno_ids, ss):
+def plinkClump(reference_ld, clump_ref,clump_r, geno_ids, ss):
     """
     Run plink and clump, get the new list of ids.
     Select just these from the summary statistics.
@@ -544,7 +544,7 @@ def plinkClump(reference_ld, clump_ref, geno_ids, ss):
         command = "awk ' {print $1,$NF} ' " + ss + ">> clump_ids.tmp" #Gives SNP id and p-value to assist in clumping
         check_call(command, shell = True)
         #Run plink clumping
-        plink_command = "plink --bfile " + reference_ld + " --clump clump_ids.tmp --clump-best --clump-p1 1 --clump-2 1 --clump-r2 0.25 --clump-kb 250"
+        plink_command = "plink --bfile " + reference_ld + " --clump clump_ids.tmp --clump-best --clump-p1 1 --clump-2 1 --clump-r2 " + str(clump_r) + " --clump-kb 250"
         check_call(plink_command, shell = True)
         clump_file = "plink.clumped.best" #The default output name with flag clump-best
     else:
@@ -614,8 +614,9 @@ if __name__ == '__main__':
     parser.add_argument("-o", "--output", default = "./prs_" + str(date.today()), help = "Specify where you would like the output file to be written and its prefix.")
     parser.add_argument("--prefiltered_ss", default = False, action = "store_true", help = "Specify this option if you have already filter summary stats for ambiguous SNPs, bi-alleleic variants, NAs. Recommended for speed.")
     parser.add_argument("--reset_ids", action = "store_true", help = "By default, program assumes genotype ids are in the form chr:loc:ref:alt. Specify this argument if this is NOT the case to.")
-    parser.add_argument("--clump", help = "Specify if you wish to do clumping. DEfault threshold is 0.5", action = "store_true", required = "--ld_ref" in sys.argv or "--clump_ref" in sys.argv)
+    parser.add_argument("--clump", help = "Specify if you wish to do clumping. Option to pass in a plink clumping.best file or the reference panel plink data.", action = "store_true", required = "--ld_ref" in sys.argv or "--clump_ref" in sys.argv)
     parser.add_argument("--ld_ref", default = None, help = "Specify an LD reference panel, required if you want to do clumping. Pass in plink1.9 format please.")
+    parser.add_argument("--clump_r2", default = 0.25, help = "Specify the clumping threshold.")
     parser.add_argument("--debug", help = "Specify this if you wish to output debug results", default = False, action = "store_true")
     parser.add_argument("--clump_ref", help = "Specify this option if you wish to perform clumping and already have a plink clump file produced (the output of plink1.9 with the --clump-best argument). Provide the path to this file.", default = "NA")
     parser.add_argument("-pv", "--plink_version", default = 2, help = "Specify which version of plink files you are using for the reference data.", type = int, choices = [1,2])
@@ -656,7 +657,7 @@ if __name__ == '__main__':
     print("Time for preprocessing (SNP filtering, reference alignment if specified, etc.", str(time.time() - start))
     print("Reading data into memory (only done on first pass)")
     if args.clump:
-        ss_parse, geno_ids = plinkClump(args.ld_ref, args.clump_ref, geno_ids, ss_parse)
+        ss_parse, geno_ids = plinkClump(args.ld_ref, args.clump_ref,args.clump_r2, geno_ids, ss_parse)
     print("Preprocessing complete")
     if args.only_preprocess:
         sys.exit()
