@@ -211,7 +211,11 @@ def quickIDCheck(ss_order, plink_order):
     #Try a number of samples to you get a high certainty
     PROB_ACC = 0.0000001
     import random
-    min_run = (np.log(PROB_ACC) / np.log(1/float(len(ss_order))))
+    try:
+        min_run = (np.log(PROB_ACC) / np.log(1/float(len(ss_order))))
+    except ZeroDivisionError:
+        print("Error in reading in ids from summary stats >_<")
+        sys.exit()
     for i in range(0, int(min_run)+5): #I want to do at least 5. Actually a better way may be to sum up the ids across an interval and see if those are the same
         rand = random.randint(0, len(ss_order))
         if plink_order[rand][:-2] != ss_order.iloc[rand]:
@@ -528,9 +532,8 @@ def plinkToMatrix(snp_keep, args, local_pvar, vplink):
             sys.exit()
     return "mat_form_tmp"
 
-#TODO- you can do this once with the 1000 genomes cohort and then just repeat with that list of "best" genes.
 #Doesn't need to be done denovo every time!
-#TODO: fix the id system for clumping, make sure consisent
+#TODO: fix the id syst" + clumping, make sure consisent
 def plinkClump(reference_ld, clump_ref,clump_r, geno_ids, ss):
     """
     Run plink and clump, get the new list of ids.
@@ -540,25 +543,31 @@ def plinkClump(reference_ld, clump_ref,clump_r, geno_ids, ss):
     if clump_ref == "NA":
         #Build the file for plink to run on 
         command = "echo SNP P > clump_ids.tmp"
-        check_call(command, shell = True) 
-        command = "awk ' {print $1,$NF} ' " + ss + ">> clump_ids.tmp" #Gives SNP id and p-value to assist in clumping
+        check_call(command, shell = True)
+        command = 'cut -f 1 ' + ss + " | cut -f 1,2 -d ':' > only_ids.tmp"
+        check_call(command, shell = True)
+        command = 'cut -f 5 ' + ss + " > only_ps.tmp && paste only_ids.tmp only_ps.tmp >> clump_ids.tmp" 
+         #Gives SNP id and p-value to assit in clumping
         check_call(command, shell = True)
         #Run plink clumping
-        plink_command = "plink --bfile " + reference_ld + " --clump clump_ids.tmp --clump-best --clump-p1 1 --clump-2 1 --clump-r2 " + str(clump_r) + " --clump-kb 250"
+        #DO not use --clump-best
+        plink_command = "plink --bfile " + reference_ld + " --clump clump_ids.tmp --clump-p1 5e-8 --clump-p2 1 --clump-r2 " + str(clump_r) + " --clump-kb 250 --clump-field P --clump-snp-field SNP"
+        print(plink_command)
+        input()
         check_call(plink_command, shell = True)
-        clump_file = "plink.clumped.best" #The default output name with flag clump-best
+        clump_file = "plink.clumped" #The default output name with flag clump
     else:
         print("Using provided reference clump...")
         clump_file = clump_ref
     #Get a way to map from one to the other
     temp_ids = '''cut -f 1,2 -d ":" ''' + ss + " > t && paste  t " + ss + " > id_mapper.tmp && rm t"
     check_call(temp_ids, shell = True)
-    command = "awk '(FNR == NR) {a[$1];next} ($1 in a) {print $0}' " + clump_ref + " id_mapper.tmp | cut -f 2,3,4,5,6  > t && mv t "+ ss
+    command = "awk '(FNR == NR) {a[$3];next} ($1 in a) {print $0}' " + clump_file + " id_mapper.tmp | cut -f 2,3,4,5,6  > t && mv t "+ ss
     check_call(command, shell = True)
-    command = "rm id_mapper.tmp"
+    command = "rm *.tmp"
     check_call(command, shell = True)
     #command = "awk '(FNR == NR) {a[$1];next} ($1 in a) {print $1}' " + clump_ref + " " + geno_ids + " > t && mv t " + geno_ids
-    command = "cut -f 1 -d ' ' " + ss +" > " + geno_ids
+    command = "cut -f 1 " +  ss +" > " + geno_ids
     check_call(command, shell = True)
     #Log reporting
     post_clump_count = getEntryCount(geno_ids, False)
@@ -605,7 +614,7 @@ if __name__ == '__main__':
 
     parser = argparse.ArgumentParser(description = "Basic tools for calculating rudimentary Polygenic Risk Scores (PRSs). This uses PLINK bed/bim/fam files and GWAS summary stats as standard inputs. Please use PLINK 2, and ensure that there are no multi-allelic SNPs")
     parser.add_argument("-snps", "--plink_snps", help = "Plink file handle for actual SNP data (omit the .extension portion)")
-    parser.add_argument("--preprocessing_done", help = "Specify this if you have already run the first steps and generated the plink2 matrix with matching IDs. Mostly for development purposes.")
+    parser.add_argument("--preprocessing_done", action = "store_true", help = "Specify this if you have already run the first steps and generated the plink2 matrix with matching IDs. Mostly for development purposes.")
     parser.add_argument("-ss", "--sum_stats", help = "Path to summary stats file. Be sure to specify format if its not DEFAULT. Assumes tab delimited", required = True)
     parser.add_argument("--ss_format", help = "Format of the summary statistics", default = "SAIGE", choices = ["DEFAULT", "SAIGE", "NEAL", "HELIX"])
     parser.add_argument("-p", "--pval", default = 5e-8, type = float, help = "Specify what pvalue threshold to use.")
@@ -614,11 +623,11 @@ if __name__ == '__main__':
     parser.add_argument("-o", "--output", default = "./prs_" + str(date.today()), help = "Specify where you would like the output file to be written and its prefix.")
     parser.add_argument("--prefiltered_ss", default = False, action = "store_true", help = "Specify this option if you have already filter summary stats for ambiguous SNPs, bi-alleleic variants, NAs. Recommended for speed.")
     parser.add_argument("--reset_ids", action = "store_true", help = "By default, program assumes genotype ids are in the form chr:loc:ref:alt. Specify this argument if this is NOT the case to.")
-    parser.add_argument("--clump", help = "Specify if you wish to do clumping. Option to pass in a plink clumping.best file or the reference panel plink data.", action = "store_true", required = "--ld_ref" in sys.argv or "--clump_ref" in sys.argv)
+    parser.add_argument("--clump", help = "Specify if you wish to do clumping. Option to pass in a plink clumping file or the reference panel plink data.", action = "store_true", required = "--ld_ref" in sys.argv or "--clump_ref" in sys.argv)
     parser.add_argument("--ld_ref", default = None, help = "Specify an LD reference panel, required if you want to do clumping. Pass in plink1.9 format please.")
     parser.add_argument("--clump_r2", default = 0.25, help = "Specify the clumping threshold.")
     parser.add_argument("--debug", help = "Specify this if you wish to output debug results", default = False, action = "store_true")
-    parser.add_argument("--clump_ref", help = "Specify this option if you wish to perform clumping and already have a plink clump file produced (the output of plink1.9 with the --clump-best argument). Provide the path to this file.", default = "NA")
+    parser.add_argument("--clump_ref", help = "Specify this option if you wish to perform clumping and already have a plink clump file produced (the output of plink1.9 clumping). Provide the path to this file.", default = "NA")
     parser.add_argument("-pv", "--plink_version", default = 2, help = "Specify which version of plink files you are using for the reference data.", type = int, choices = [1,2])
     parser.add_argument("--align_ref", action = "store_true", help = "Specify this if you would like us to align the reference alleles between the target and training data. If this is already done, we recommend omitting this flag since it will create an additional copy of the genotype data.")
     parser.add_argument("--only_preprocess", action = "store_true", help = "Specify this option if you would like to terminate once preprocessing of SNPs (including aligning reference, removing ambiguous SNPs, preparing summary stat sublist) has completed.")
@@ -636,15 +645,12 @@ if __name__ == '__main__':
         VAR_IN_ID = False #Variant information is not included in genotype id
     if args.preprocessing_done:
         print("Preprocessing has already been completed. Proceeding with PRS calculations...")
-        print("Not implemented error, will run as normal")
-        #Unload everything in the pickle, which contains the path information for everything:
-            #The snp_indices data, the snp_matrix path
-    if not args.prefiltered_ss:
+    if not args.prefiltered_ss and not args.preprocessing_done:
         print("Ambiguous SNPs and indels have not been filtered out from SS data. Filtering now...")
         args.sum_stats = filterSumStatSNPs(args.sum_stats, args.ss_format)
         args.ss_format = "DEFAULT" #ID REF ALT BETA PVAL
         print("Ambiguous SNPs and indels removed. New file is", args.sum_stats)
-    if args.align_ref:
+    if args.align_ref and not args.preprocessing_done:
         args.plink_snps = alignReferenceByPlink(args.plink_snps, args.plink_version, args.sum_stats, args.ss_format) #Make a local copy of the data with the updated genotype
         print("A new plink2 fileset with matched reference sequences has been generated", args.plink_snps)
         print("Strand flips have been corrected for. Proceeding with analysis")
@@ -654,9 +660,9 @@ if __name__ == '__main__':
     local_pvar, geno_ids, ss_parse = prepSNPIDs(args.plink_snps, args.sum_stats,args.ss_format, vplink = args.plink_version, max_p = max(pvals))
     num_pat = getPatientCount(args.plink_snps, args.plink_version)
     updateLog("Number of patients detected in sample:", str(num_pat))
-    print("Time for preprocessing (SNP filtering, reference alignment if specified, etc.", str(time.time() - start))
-    print("Reading data into memory (only done on first pass)")
-    if args.clump:
+    print("Time for preprocessing (SNP filtering, reference alignment if specified, etc.):", str(time.time() - start))
+    print("Reading data into memory")
+    if args.clump and not args.preprocessing_done:
         ss_parse, geno_ids = plinkClump(args.ld_ref, args.clump_ref,args.clump_r2, geno_ids, ss_parse)
     print("Preprocessing complete")
     if args.only_preprocess:
