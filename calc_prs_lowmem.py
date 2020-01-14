@@ -683,5 +683,3 @@ if __name__ == '__main__':
     stop = time.time()
     print("Total runtime:", str(stop - start))
     #TODO: Add cleanup functionality, remove the massive files you've made.
-
-
