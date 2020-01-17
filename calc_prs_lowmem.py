@@ -12,6 +12,7 @@ import sys
 import subprocess
 from subprocess import check_call 
 import os
+from datetime import date
 import time
 import multiprocessing as mp
 from operator import itemgetter
@@ -33,11 +34,14 @@ DEBUG = True
 DEBUG_DAT = dict()
 LOG="log_file.txt"
 
-def updateLog(*prints):
+def updateLog(*prints): #, std_out = False):
     with open(LOG, 'a') as ostream:
         for a in prints:
             ostream.write(a + " ")
+            #if std_out:
+            #    print(a)
         ostream.write("\n")
+    
 
 def readInSummaryStats(s_path):
     #ID, ref, alt, beta, pvalue. Th
@@ -93,12 +97,17 @@ def prepSNPIDs(snp_file, ss_file, ss_type, vplink = 2, max_p = 1):
     global VAR_IN_ID
     max_p = str(max_p)
     #Report the number of snps in the genotype file for log file
-    if vplink == 2:
-        local_geno = snp_file + ".pvar"
-        updateLog("Number of variants detected in original genotype file", str(getEntryCount(snp_file + ".pvar", True)))
-    else: #vplink == 1:
-        local_geno = snp_file + ".bim"
-        updateLog("Number of variants detected in original genotype file", str(getEntryCount(local_geno, False)))
+    try:
+        if vplink == 2:
+            local_geno = snp_file + ".pvar"
+            updateLog("Number of variants detected in original genotype file", str(getEntryCount(snp_file + ".pvar", True)))
+        else: #vplink == 1:
+            local_geno = snp_file + ".bim"
+            updateLog("Number of variants detected in original genotype file", str(getEntryCount(local_geno, False)))
+    except FileNotFoundError:
+        print("Are you sure you specified the correct version of plink? We are unable to find the plink file you specified...")
+        print("Program will quit.")
+        sys.exit() 
     geno_id_list = "geno_ids.f"
     inter_sum_stats = "ss_filt.f" #Intersected summary stats with genotype ids
     #If we have already generated our geno_id_list,skip this tep 
@@ -295,8 +304,12 @@ def linearGenoParse(snp_matrix, snp_indices,pvals, scores, ss_ids):
                 for p in pvals:
                     snp_index = snp_indices[p][INDEX]
                     #sel = var_map[snp_index]#should also use item getter here
-                    sel = (itemgetter(*snp_index)(var_map))
-                    new_genos = np.array(itemgetter(*sel)(rel_data), dtype = np.float64)
+                    try:
+                        sel = (itemgetter(*snp_index)(var_map))
+                        new_genos = np.array(itemgetter(*sel)(rel_data), dtype = np.float64)
+                    except TypeError:
+                        print("Unexpected error for", p, sel, rel_data)
+                        sys.exit()
                     if first_pval:
                         new_score = scoreCalculation(new_genos, snp_indices[p][B])
                         scores[p].append(new_score)
@@ -318,7 +331,9 @@ def linearGenoParse(snp_matrix, snp_indices,pvals, scores, ss_ids):
             if len(dat) <= 1:
                 print("Finished all the samples!")
                 break
-            
+    if line_counter == 0:
+        updateLog("Matrix file had no entries, please delete *.raw and try re-running.")
+        sys.exit()        
     return scores, patient_ids, DEBUG_DAT #basically a pval:[list of snps]  
     if line_counter == 1:
         print("There appears to be some error with the genotype plink matrix. Please ensure the genotype data is correct or the plink call was not interrupted.")
@@ -384,7 +399,7 @@ def alignReferenceByPlink(old_plink,plink_version, ss, ss_type):
     try:
         #12/12 adding an additional call to filter stuff
         #Filter out multi-allelic snps and X
-        
+        #We need to do this before we can align, otherwise plink generates errors 
         plink_call_first = "plink2" + ftype + old_plink + " --make-pgen --out filtered_target --exclude remove_multi.t --not-chr X"
         check_call(plink_call_first, shell = True)
         plink_call = "plink2 --pfile filtered_target --ref-allele force aligner.t --make-pgen --out new_plink"
@@ -394,6 +409,8 @@ def alignReferenceByPlink(old_plink,plink_version, ss, ss_type):
         print("It appears there was an error in aligning the reference, likely due to known alleles that we attempted to swap. We suggest correcting these alleles or aligining the reference strands indepndently using plink --ref-allele")
         sys.exit()
     if not DEBUG:
+        if os.path.isfile("filtered_target.pvar"):
+            check_call("rm filtered_target*", shell = True) 
         clean_up = "rm aligner.t"
         check_call(clean_up, shell = True)
     return "new_plink"
@@ -540,6 +557,8 @@ def plinkClump(reference_ld, clump_ref,clump_r, geno_ids, ss):
     Select just these from the summary statistics.
     """
     pre_clump_count = getEntryCount(geno_ids, False)
+    updateLog("Clumping:")
+    updateLog("SNPs prior to clumping", str(pre_clump_count))
     if clump_ref == "NA":
         #Build the file for plink to run on 
         command = "echo SNP P > clump_ids.tmp"
@@ -551,9 +570,8 @@ def plinkClump(reference_ld, clump_ref,clump_r, geno_ids, ss):
         check_call(command, shell = True)
         #Run plink clumping
         #DO not use --clump-best
-        plink_command = "plink --bfile " + reference_ld + " --clump clump_ids.tmp --clump-p1 5e-8 --clump-p2 1 --clump-r2 " + str(clump_r) + " --clump-kb 250 --clump-field P --clump-snp-field SNP"
-        print(plink_command)
-        input()
+        plink_command = "plink --bfile " + reference_ld + " --clump clump_ids.tmp --clump-p1 1 --clump-p2 1 --clump-r2 " + str(clump_r) + " --clump-kb 250 --clump-field P --clump-snp-field SNP"
+        updateLog(plink_command)
         check_call(plink_command, shell = True)
         clump_file = "plink.clumped" #The default output name with flag clump
     else:
@@ -572,6 +590,7 @@ def plinkClump(reference_ld, clump_ref,clump_r, geno_ids, ss):
     #Log reporting
     post_clump_count = getEntryCount(geno_ids, False)
     updateLog("Number of SNPs removed by clumping (selecting only top clump variant):", str(pre_clump_count - post_clump_count)) 
+    updateLog("SNPs remaining:", str(post_clump_count))
     return ss, geno_ids
     
 
@@ -617,8 +636,7 @@ if __name__ == '__main__':
     parser.add_argument("--preprocessing_done", action = "store_true", help = "Specify this if you have already run the first steps and generated the plink2 matrix with matching IDs. Mostly for development purposes.")
     parser.add_argument("-ss", "--sum_stats", help = "Path to summary stats file. Be sure to specify format if its not DEFAULT. Assumes tab delimited", required = True)
     parser.add_argument("--ss_format", help = "Format of the summary statistics", default = "SAIGE", choices = ["DEFAULT", "SAIGE", "NEAL", "HELIX"])
-    parser.add_argument("-p", "--pval", default = 5e-8, type = float, help = "Specify what pvalue threshold to use.")
-    parser.add_argument("--pvals", help= "Use this if you wish to specify multiple at once, in a list separated by commas")
+    parser.add_argument("--pvals", default = "5e-8,0.1", help= "Specify which p-values to threshold at. To do multiple at once, list them separated by commas")
     parser.add_argument("--maf", default = 0.01, type = float, help = "Specify what MAF cutoff to use.")
     parser.add_argument("-o", "--output", default = "./prs_" + str(date.today()), help = "Specify where you would like the output file to be written and its prefix.")
     parser.add_argument("--prefiltered_ss", default = False, action = "store_true", help = "Specify this option if you have already filter summary stats for ambiguous SNPs, bi-alleleic variants, NAs. Recommended for speed.")
@@ -633,10 +651,12 @@ if __name__ == '__main__':
     parser.add_argument("--only_preprocess", action = "store_true", help = "Specify this option if you would like to terminate once preprocessing of SNPs (including aligning reference, removing ambiguous SNPs, preparing summary stat sublist) has completed.")
     parser.add_argument("--OVERRIDE", help = "Use for deubgging- pass the matrix in")
     args = parser.parse_args()
-    pvals = [args.pval]
     DEBUG = args.debug
     start = time.time()    
     #Extract the pvalues to asses at
+    updateLog("Start of run:", str(date.today()))
+    args_print = str(args).split(",")[1:]
+    updateLog("Arguments", '\n'.join(args_print))
     if args.pvals:
         t = (args.pvals).strip().split(",")
         pvals = [float(x) for x in t]
@@ -668,7 +688,7 @@ if __name__ == '__main__':
     if args.only_preprocess:
         sys.exit()
     
-    updateLog("Total number of SNPs included in analysis", str(getEntryCount(geno_ids,False)))  
+    updateLog("Total number of SNPs for use in PRS calculations:", str(getEntryCount(geno_ids,False)))  
     stats_complete = readInSummaryStats(ss_parse)
     snp_indices = indexSSByPval(pvals,stats_complete)
     if args.OVERRIDE:
