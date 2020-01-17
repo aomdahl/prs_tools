@@ -36,12 +36,42 @@ LOG="log_file.txt"
 
 def updateLog(*prints): #, std_out = False):
     with open(LOG, 'a') as ostream:
-        for a in prints:
-            ostream.write(a + " ")
-            #if std_out:
-            #    print(a)
+        if prints[-1] == True:
+            for i in range(0, len(prints)-1):
+                print(prints[i])
+                ostream.write(prints[i] + ' ')
+        else:
+            for a in prints:
+                ostream.write(a + " ")
         ostream.write("\n")
     
+def getEntryCount(fin, header):
+    """
+    Quickly count the number of entries in a file
+    @param fin: file to count
+    @param header: if the file has a header not.
+    """
+    if header:
+        return sum(1 for line in open(fin)) -1
+    else:
+        return sum(1 for line in open(fin))
+
+def firstColCopy(f1, f2):
+    """
+    Write the first column of a file to another file, using bash commands
+    Typically used for ss_filt > geno_ids
+    """
+    command = " awk '{print $1}' " + f1 + " > " + f2
+    check_call(command, shell = True)
+
+def getPatientCount(snp_file, vers):
+    try:
+        if vers == 1:
+            return getEntryCount(snp_file + ".fam", False)
+        return getEntryCount(snp_file + ".psam", True)
+    except:
+        print("It appears the plink family file is missing or has the incorrect file extension. Please check it out!")
+        sys.exit()
 
 def readInSummaryStats(s_path):
     #ID, ref, alt, beta, pvalue. Th
@@ -83,7 +113,6 @@ def prepSummaryStats(geno_ids, sum_path, pval_thresh):
     #Pro tip- in benchmarks, cut performs better here than awk
     command = "cut -f 1 -d ' ' ss.tmp > ss_ids.tmp"
     check_call(command, shell = True)
-    #TODO: determine if the above awk/cut commands are faster than dask filtering + computing the IDs. Or maybe just doing that with pandas.
     return "ss.tmp", "ss_ids.tmp"
 
 #This will extract the ids we want to be working with.
@@ -122,16 +151,17 @@ def prepSNPIDs(snp_file, ss_file, ss_type, vplink = 2, max_p = 1):
                 check_call(command, shell = True)
             except subprocess.CalledProcessError:
                 print("Unable to generate modified pvar/bim file. Are you sure you specified the correct plink version?")
-                print("Failed on command", command)
+                updateLog("Failed on command", command, True)
                 sys.exit()
         if vplink == 2:
             command_n = "awk ' (NR> 1 && $1 !~ /X/) {print $3}' " + local_geno + " > " + geno_id_list
         else:
             command_n = "awk ' ($1 !~ /X/) {print $2}' " + local_geno + " > " + geno_id_list
         check_call(command_n, shell = True)
-    
-    VAR_IN_ID = True #we have imposed the variant information into the IDs
-    if not os.path.isfile(inter_sum_stats):
+        VAR_IN_ID = True#we have imposed the variant information into the IDs
+    #If the ss_filt.f file doesn't exist or it has a different length than the geno_ids file,
+    if not os.path.isfile(inter_sum_stats) or (os.path.isfile(inter_sum_stats) and (getEntryCount(geno_id_list, False) != getEntryCount(inter_sum_stats, False))):
+        #Choose only ids below the highes p-value threshold that appear both in the genotype and summary stat data. Trying to minimizize write out time later on.
         write_out = geno_id_list + " " + ss_file + " > " + inter_sum_stats
         if ss_type == "SAIGE":
             #ID, REF, ALT, BETA, SEBETA, Tstat, pval
@@ -147,25 +177,8 @@ def prepSNPIDs(snp_file, ss_file, ss_type, vplink = 2, max_p = 1):
             sys.exit()
         check_call(command, shell = True)
         #reset the ids we use downstream
-        command = " awk '{print $1}' " + inter_sum_stats + " > " + geno_id_list
-        check_call(command, shell = True)
-
+        firstColCopy(inter_sum_stats, geno_id_list)
     return local_geno, geno_id_list, inter_sum_stats
-
-def getEntryCount(fin, header):
-    if header:
-        return sum(1 for line in open(fin)) -1
-    else:
-        return sum(1 for line in open(fin))
-
-def getPatientCount(snp_file, vers):
-    try:
-        if vers == 1:
-            return getEntryCount(snp_file + ".fam", False)
-        return getEntryCount(snp_file + ".psam", True)
-    except:
-        print("It appears the plink family file is missing or has the incorrect file extension. Please check it out!")
-        sys.exit()
 
 def scoreCalculation(geno, betas):
     #Note that what is done depends if the genotype data codes for the major or minor allele
@@ -247,26 +260,24 @@ def buildVarMap(plink_order, ss_order):
     return ret
     
 def linearGenoParse(snp_matrix, snp_indices,pvals, scores, ss_ids):
-    """Parse the patient file
-    snp_matrix -- the path to the massive genotype file
-    snp_indieces -- the map with the indices for each pvalue we care about
-    scores -- what is returned, stores the scores
-    pvals -- which pvalues we measure at
-    ss_ids -- the list of ids from the summary stats list, for ordering purposes
+    """
+    Parse the patient file
+    @param snp_matrix -- the path to the massive genotype file
+    @param snp_indieces -- the map with the indices for each pvalue we care about
+    @param scores -- what is returned, stores the scores
+    @param pvals -- which pvalues we measure at
+    @param ss_ids -- the list of ids from the summary stats list, for ordering purposes
     """
     patient_ids = list()
     report_index = 100
-    pvals.sort()
+    pvals.sort() #smallest to largest
     with open(snp_matrix + ".raw", 'r') as istream:
         line_counter = 0
         dat = istream.readline().strip().split('\t')
-        line_len = len(dat)
         while dat:
             if line_counter == 0:
                 var_map = buildVarMap(dat[6:], ss_ids)
-                if DEBUG:
-                    DEBUG_DAT[REFID] = dat[6:]
-                    #print(len(DEBUG_DAT[REFID])) 
+                if DEBUG: DEBUG_DAT[REFID] = dat[6:]
                 print("Proceeding with line-by-line calculation now...")
                 first_pval = True
                 prev = 0
@@ -303,7 +314,6 @@ def linearGenoParse(snp_matrix, snp_indices,pvals, scores, ss_ids):
                 new_score = 0
                 for p in pvals:
                     snp_index = snp_indices[p][INDEX]
-                    #sel = var_map[snp_index]#should also use item getter here
                     try:
                         sel = (itemgetter(*snp_index)(var_map))
                         new_genos = np.array(itemgetter(*sel)(rel_data), dtype = np.float64)
@@ -317,8 +327,7 @@ def linearGenoParse(snp_matrix, snp_indices,pvals, scores, ss_ids):
                     else:
                         new_score = scoreCalculation(new_genos, snp_indices[p][B]) + prev_score
                         scores[p].append(new_score)
-                        if DEBUG:
-                            updateLog(str(patient_ids[-1]), str(new_score))
+                        if DEBUG: updateLog(str(patient_ids[-1]), str(new_score))
                     prev_score = new_score     
             try:   
                 dat = istream.readline().split('\t')
@@ -328,18 +337,13 @@ def linearGenoParse(snp_matrix, snp_indices,pvals, scores, ss_ids):
 
             if line_counter % report_index == 0:
                 print("Currently at individual/sample", line_counter)
-            if len(dat) <= 1:
-                print("Finished all the samples!")
+            if len(dat) <= 1 and line_counter > 1:
+                print("Finished parsing sample genotype data!")
                 break
-    if line_counter == 0:
-        updateLog("Matrix file had no entries, please delete *.raw and try re-running.")
+    if line_counter <= 1:
+        updateLog("There appears to be some error with the genotype plink matrix- no entries were found. Please ensure the genotype data is correct or the plink call was not interrupted.  Consider deleting *.raw and re-running.", True)
         sys.exit()        
-    return scores, patient_ids, DEBUG_DAT #basically a pval:[list of snps]  
-    if line_counter == 1:
-        print("There appears to be some error with the genotype plink matrix. Please ensure the genotype data is correct or the plink call was not interrupted.")
-        sys.exit()
-    return scores, patient_ids, None
-
+    return scores, patient_ids #basically a pval:[list of snps]  
 
 def calculatePRS(pvals, snp_matrix, snp_indices, snp_list):
     """
@@ -355,7 +359,7 @@ def calculatePRS(pvals, snp_matrix, snp_indices, snp_list):
     scores, patient_ids, debug_tab = linearGenoParse(snp_matrix, snp_indices,pvals, scores, snp_list)
     end = time.time()
     print("Calculation and read in time:", str(end-start))
-    return scores, patient_ids, debug_tab
+    return scores, patient_ids
 
 def alignReferenceByPlink(old_plink,plink_version, ss, ss_type):
     """
@@ -540,7 +544,7 @@ def plinkToMatrix(snp_keep, args, local_pvar, vplink):
         if vplink == 1:
             syscall = " --bfile "
             annot = " --bim "
-        call = "plink2 " + syscall  + args + annot + local_pvar + " --geno --not-chr X --extract " + snp_keep + " --out mat_form_tmp --export A --max-alleles 2"
+        call = "plink2 " + syscall  + args + annot + local_pvar + " --geno --not-chr X --extract " + snp_keep + " --out mat_form_tmp --export A"
         check_call(call, shell = True) 
         #--geno removes snps with more than 10% missing from the data.
         print("User-readable genotype matrix generated")
@@ -557,7 +561,7 @@ def plinkClump(reference_ld, clump_ref,clump_r, geno_ids, ss):
     Select just these from the summary statistics.
     """
     pre_clump_count = getEntryCount(geno_ids, False)
-    updateLog("Clumping:")
+    updateLog("Clumping...", True)
     updateLog("SNPs prior to clumping", str(pre_clump_count))
     if clump_ref == "NA":
         #Build the file for plink to run on 
@@ -584,9 +588,8 @@ def plinkClump(reference_ld, clump_ref,clump_r, geno_ids, ss):
     check_call(command, shell = True)
     command = "rm *.tmp"
     check_call(command, shell = True)
-    #command = "awk '(FNR == NR) {a[$1];next} ($1 in a) {print $1}' " + clump_ref + " " + geno_ids + " > t && mv t " + geno_ids
-    command = "cut -f 1 " +  ss +" > " + geno_ids
-    check_call(command, shell = True)
+    #Update geno_ids for extraction.
+    firstColCopy(ss, geno_ids)
     #Log reporting
     post_clump_count = getEntryCount(geno_ids, False)
     updateLog("Number of SNPs removed by clumping (selecting only top clump variant):", str(pre_clump_count - post_clump_count)) 
@@ -600,7 +603,6 @@ def getPatientIDs(snp_matrix):
 
 
 def writeScores(scores, ids, destination, debug = False):
-   #May be able to just do it faster in PANDAS:
     scores["IID"] = ids
     tab_out = pd.DataFrame.from_dict(scores)
     tab_out = tab_out.set_index("IID")
@@ -624,10 +626,6 @@ def writeScoresDebug(debug_tab, destination):
                 else:
                     write_s  = write_s + '\t'
             ostream.write(write_s[:-1] + '\n')
-
-def writeSNPIDs(ids):
-    ids.to_csv("snp_ids.tmp", header = False, index = False, sep = '\t') #(should have 2 columns of the family/infamily ids, which appear to be the same.)
-    return "snp_ids.tmp"
 
 if __name__ == '__main__':
 
@@ -664,30 +662,29 @@ if __name__ == '__main__':
     if args.reset_ids:
         VAR_IN_ID = False #Variant information is not included in genotype id
     if args.preprocessing_done:
-        print("Preprocessing has already been completed. Proceeding with PRS calculations...")
+        updateLog("Assuming data preprocessing- including filtering by summary stats, aligning references, and clumping- has already been completed. Proceeding with PRS calculations...", True)
     if not args.prefiltered_ss and not args.preprocessing_done:
-        print("Ambiguous SNPs and indels have not been filtered out from SS data. Filtering now...")
+        print("Filtering ambiguous SNPs and indels from SS data...")
         args.sum_stats = filterSumStatSNPs(args.sum_stats, args.ss_format)
         args.ss_format = "DEFAULT" #ID REF ALT BETA PVAL
-        print("Ambiguous SNPs and indels removed. New file is", args.sum_stats)
+        updateLog("Ambiguous SNPs and indels removed. Filtered summary statistics written out to", args.sum_stats, True)
     if args.align_ref and not args.preprocessing_done:
         args.plink_snps = alignReferenceByPlink(args.plink_snps, args.plink_version, args.sum_stats, args.ss_format) #Make a local copy of the data with the updated genotype
         print("A new plink2 fileset with matched reference sequences has been generated", args.plink_snps)
-        print("Strand flips have been corrected for. Proceeding with analysis")
-        args.plink_version =2 #We have updated the type to 2
+        updateLog("Strand flips have been corrected for. Proceeding with analysis", True)
+        args.plink_version = 2 #We have updated the type to 2
     
     print("Selecting IDs for analysis...")
     local_pvar, geno_ids, ss_parse = prepSNPIDs(args.plink_snps, args.sum_stats,args.ss_format, vplink = args.plink_version, max_p = max(pvals))
     num_pat = getPatientCount(args.plink_snps, args.plink_version)
-    updateLog("Number of patients detected in sample:", str(num_pat))
-    print("Time for preprocessing (SNP filtering, reference alignment if specified, etc.):", str(time.time() - start))
-    print("Reading data into memory")
+    updateLog("Number of patients detected in sample:", str(num_pat), True)
+    updateLog("Time for preprocessing (SNP filtering, reference alignment if specified, etc.):", str(time.time() - start), True)
     if args.clump and not args.preprocessing_done:
         ss_parse, geno_ids = plinkClump(args.ld_ref, args.clump_ref,args.clump_r2, geno_ids, ss_parse)
     print("Preprocessing complete")
     if args.only_preprocess:
         sys.exit()
-    
+        
     updateLog("Total number of SNPs for use in PRS calculations:", str(getEntryCount(geno_ids,False)))  
     stats_complete = readInSummaryStats(ss_parse)
     snp_indices = indexSSByPval(pvals,stats_complete)
@@ -696,7 +693,7 @@ if __name__ == '__main__':
     else:
         snp_matrix = plinkToMatrix(geno_ids, args.plink_snps, local_pvar, args.plink_version) 
     print("Parsing the genotype file...")
-    scores, patient_ids, debug_dat = calculatePRS(pvals, snp_matrix, snp_indices,stats_complete[REFID])
+    scores, patient_ids = calculatePRS(pvals, snp_matrix, snp_indices,stats_complete[REFID])
     
     writeScores(scores, patient_ids, args.output + ".tsv")
     print("Scores written out to ", args.output + ".tsv")
