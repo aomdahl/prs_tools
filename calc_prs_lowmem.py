@@ -356,7 +356,7 @@ def calculatePRS(pvals, snp_matrix, snp_indices, snp_list):
     #Seraj shoutout
     start = time.time()
     scores = { p : [] for p in pvals}
-    scores, patient_ids, debug_tab = linearGenoParse(snp_matrix, snp_indices,pvals, scores, snp_list)
+    scores, patient_ids = linearGenoParse(snp_matrix, snp_indices,pvals, scores, snp_list)
     end = time.time()
     print("Calculation and read in time:", str(end-start))
     return scores, patient_ids
@@ -419,7 +419,7 @@ def alignReferenceByPlink(old_plink,plink_version, ss, ss_type):
         check_call(clean_up, shell = True)
     return "new_plink"
 
-def filterSumStatSNPs(ss, ss_type):
+def filterSumStatSNPs(ss, ss_type, keep_ambig_filter):
     """
     Filters summary statistics based on the specified file type, as follows:
     1) Remove anything more than bi-allelic
@@ -434,6 +434,9 @@ def filterSumStatSNPs(ss, ss_type):
     ambig_list = {"AT", "TA", "GC", "CG"}
     sizes = {"start": 0,"non_bi": 0, "ambig":0, "na":0, "x":0}
     comment = {"ambig": "Ambiguous SNPs along with INDELS removed:", "na": "Variants with missing effect sizes removed:", "x": "Genes on the X chromosome removed:", "non_bi": "Non-biallelic SNPs removed:"}
+    ambig_filter = 0.4
+    if keep_ambig_filter:
+        ambig_filter = 100
     ss_t = None
     out_name = "filtered_" + ss_type + ".ss"
     #Some room to beautify the code here...
@@ -461,20 +464,25 @@ def filterSumStatSNPs(ss, ss_type):
         ss_t.rename(columns = {"BETA":BETA, "P":PVAL, "A2":REF, "A1":ALT}, inplace = True)
         ss_t = ss_t[["ID", REF, ALT, BETA, PVAL]]    
     elif ss_type == "NEAL":
+        #effect is always givein in terms of the alternate allele.  
         #variant    minor_allele    minor_AF    low_confidence_variant  n_complete_samples  AC  ytx beta    se  tstat   pval
-        ss_t = pd.read_csv(ss, sep = '\t',usecols = ["variant", "beta", "pval", "minor_AF"], dtype = {"variant": 'string_', "beta":'float64', "pval":'float64', "minor_AF":"float64"})
+        ss_t = pd.read_csv(ss, sep = '\t',usecols = ["variant","minor_allele", "beta", "pval", "minor_AF"], dtype = {"variant": 'string_', "beta":'float64', "pval":'float64', "minor_AF":"float64"})
         sizes["start"] = ss_t.shape[0]
         id_data = ss_t.variant.str.split(":", expand = True)  #gives chr:pos:ref:alt
         ss_t["comb"] = id_data[2] + id_data[3]#last 2 characters at the back end of the variant
         ss_t["CHR"] = id_data[0]
-        ss_t["loc"] = id_data[0] + ":" + id_data[1]
+        ss_t["location"] = id_data[0] + ":" + id_data[1]
+        ss_t[REF] = id_data[2]
+        ss_t[ALT] = id_data[3]
+        #ss_t["f"] = id_data[2]
+        #ss_t["s"] = id_data[3] 
         #Removing non_bi-allelic SNPs
-        ss_t.drop_duplicates(subset = "loc", keep = False, inplace = True)
+        ss_t.drop_duplicates(subset = "location", keep = False, inplace = True)
         sizes["non_bi"] = ss_t.shape[0]
         #Removing ambiguous SNPs
         ss_t = ss_t[ss_t.comb.isin(filter_list)]
-        ss_t = ss_t[(ss_t.comb.isin(ambig_list) & (ss_t.minor_AF > 0.4)) | (ss_t.comb.isin(noambig_list))]
-        #remove ones that are in the ambiguous list unless they have a MAF > 0.4
+        ss_t = ss_t[(ss_t.comb.isin(ambig_list) & (ss_t.minor_AF > ambig_filter)) | (ss_t.comb.isin(noambig_list))]
+        #remove ones that are in the ambiguous list unless they have a MAF > 0.4, the default
         sizes["ambig"] = ss_t.shape[0]
         #Also remove SNPs with NA
         ss_t = ss_t[ss_t.beta.notnull()] #here its NaN
@@ -484,8 +492,11 @@ def filterSumStatSNPs(ss, ss_type):
         sizes["x"] = ss_t.shape[0]
         #Set it up for write_out ID, ref, alt, beta, pval
         ss_t.rename(columns = {"variant":"ID", "beta":BETA, "pval":PVAL}, inplace = True)
-        ss_t[REF] = id_data[2]
-        ss_t[ALT] = id_data[3]
+        #NEAL has unusual case where occassionally ALT != minor allele. We check for that here:
+        #1/27- this doesn't matter at all. The beta is in terms of ALT all the time. So don't do anything.
+        #ss_t[REF] = np.where(ss_t["minor_allele"] == ss_t["f"],ss_t["s"],ss_t["f"])
+        #ss_t[ALT] = np.where(ss_t["minor_allele"] == ss_t["s"],ss_t["s"],ss_t["f"])  
+        ss_t["ID"] = ss_t.location + ":" +  ss_t.REF + ":" + ss_t.ALT
         ss_t = ss_t[["ID", REF, ALT, BETA,PVAL]]
     elif ss_type == "DEFAULT":
         print("Are you sure you want to re-filter the summary stats? It appears they may have already been filtered...")
@@ -535,27 +546,32 @@ def plinkToMatrix(snp_keep, args, local_pvar, vplink):
     @param snp_keep is the path to the file with the SNP list. Currently just a single column, TODO check if this will work for plink filtering.
     """
     #Write out the list of SNPs to keep
-    #if os.path.isfile("mat_form_tmp.bed"):
+    #Careful- just to check our SNP numbers
     if os.path.isfile("mat_form_tmp.raw"):
-        print("Using currently existing genotype matrix...")
-    else:
-        syscall = " --pfile "
-        annot =  " --pvar "
-        if vplink == 1:
-            syscall = " --bfile "
-            annot = " --bim "
-        call = "plink2 " + syscall  + args + annot + local_pvar + " --geno --not-chr X --extract " + snp_keep + " --out mat_form_tmp --export A"
-        check_call(call, shell = True) 
-        #--geno removes snps with more than 10% missing from the data.
-        print("User-readable genotype matrix generated")
-        if not os.path.isfile("mat_form_tmp.raw"): 
-            print("PLINK file was not correctly created. Program will terminate.")
-            sys.exit()
+        #Check that its SNPs match the SNPs we have
+        with open("mat_form_tmp.raw", 'r') as istream:
+            header_line = istream.readline().strip()
+        if len(header_line) - 6 == getEntryCount(snp_keep, False):
+            print("Using currently existing genotype matrix...")
+            return "mat_form_tmp"
+
+    syscall = " --pfile "
+    annot =  " --pvar "
+    if vplink == 1:
+        syscall = " --bfile "
+        annot = " --bim "
+    call = "plink2 " + syscall  + args + annot + local_pvar + " --geno --not-chr X --extract " + snp_keep + " --out mat_form_tmp --export A"
+    check_call(call, shell = True) 
+    #--geno removes snps with more than 10% missing from the data.
+    print("User-readable genotype matrix generated")
+    if not os.path.isfile("mat_form_tmp.raw"): 
+        print("PLINK file was not correctly created. Program will terminate.")
+        sys.exit()
     return "mat_form_tmp"
 
 #Doesn't need to be done denovo every time!
 #TODO: fix the id syst" + clumping, make sure consisent
-def plinkClump(reference_ld, clump_ref,clump_r, geno_ids, ss):
+def plinkClump(reference_ld, clump_ref,clump_r, maf_thresh, geno_ids, ss):
     """
     Run plink and clump, get the new list of ids.
     Select just these from the summary statistics.
@@ -574,7 +590,7 @@ def plinkClump(reference_ld, clump_ref,clump_r, geno_ids, ss):
         check_call(command, shell = True)
         #Run plink clumping
         #DO not use --clump-best
-        plink_command = "plink --bfile " + reference_ld + " --clump clump_ids.tmp --clump-p1 1 --clump-p2 1 --clump-r2 " + str(clump_r) + " --clump-kb 250 --clump-field P --clump-snp-field SNP"
+        plink_command = "plink --bfile " + reference_ld + " --clump clump_ids.tmp --clump-p1 1 --clump-p2 1 --clump-r2 " + str(clump_r) + " --clump-kb 250 --clump-field P --clump-snp-field SNP --maf " + str(maf_thresh)
         updateLog(plink_command)
         check_call(plink_command, shell = True)
         clump_file = "plink.clumped" #The default output name with flag clump
@@ -586,8 +602,9 @@ def plinkClump(reference_ld, clump_ref,clump_r, geno_ids, ss):
     check_call(temp_ids, shell = True)
     command = "awk '(FNR == NR) {a[$3];next} ($1 in a) {print $0}' " + clump_file + " id_mapper.tmp | cut -f 2,3,4,5,6  > t && mv t "+ ss
     check_call(command, shell = True)
-    command = "rm *.tmp"
-    check_call(command, shell = True)
+    if not DEBUG:
+        command = "rm *.tmp"
+        check_call(command, shell = True)
     #Update geno_ids for extraction.
     firstColCopy(ss, geno_ids)
     #Log reporting
@@ -634,7 +651,7 @@ if __name__ == '__main__':
     parser.add_argument("--preprocessing_done", action = "store_true", help = "Specify this if you have already run the first steps and generated the plink2 matrix with matching IDs. Mostly for development purposes.")
     parser.add_argument("-ss", "--sum_stats", help = "Path to summary stats file. Be sure to specify format if its not DEFAULT. Assumes tab delimited", required = True)
     parser.add_argument("--ss_format", help = "Format of the summary statistics", default = "SAIGE", choices = ["DEFAULT", "SAIGE", "NEAL", "HELIX"])
-    parser.add_argument("--pvals", default = "5e-8,0.1", help= "Specify which p-values to threshold at. To do multiple at once, list them separated by commas")
+    parser.add_argument("--pvals", default = "ALL", help= "Specify which p-values to threshold at. To do multiple at once, list them separated by commas")
     parser.add_argument("--maf", default = 0.01, type = float, help = "Specify what MAF cutoff to use.")
     parser.add_argument("-o", "--output", default = "./prs_" + str(date.today()), help = "Specify where you would like the output file to be written and its prefix.")
     parser.add_argument("--prefiltered_ss", default = False, action = "store_true", help = "Specify this option if you have already filter summary stats for ambiguous SNPs, bi-alleleic variants, NAs. Recommended for speed.")
@@ -646,8 +663,9 @@ if __name__ == '__main__':
     parser.add_argument("--clump_ref", help = "Specify this option if you wish to perform clumping and already have a plink clump file produced (the output of plink1.9 clumping). Provide the path to this file.", default = "NA")
     parser.add_argument("-pv", "--plink_version", default = 2, help = "Specify which version of plink files you are using for the reference data.", type = int, choices = [1,2])
     parser.add_argument("--align_ref", action = "store_true", help = "Specify this if you would like us to align the reference alleles between the target and training data. If this is already done, we recommend omitting this flag since it will create an additional copy of the genotype data.")
-    parser.add_argument("--only_preprocess", action = "store_true", help = "Specify this option if you would like to terminate once preprocessing of SNPs (including aligning reference, removing ambiguous SNPs, preparing summary stat sublist) has completed.")
+    parser.add_argument("--preprocess_only", action = "store_true", help = "Specify this option if you would like to terminate once preprocessing of SNPs (including aligning reference, removing ambiguous SNPs, preparing summary stat sublist) has completed.")
     parser.add_argument("--OVERRIDE", help = "Use for deubgging- pass the matrix in")
+    parser.add_argument("--no_ambiguous_snps", help = "Specify this if you wish to remove all ambiguous SNPs whatsover, regardless of MAF. Default is to keep those with MAF > 0.4", action = "store_true", default = False)
     args = parser.parse_args()
     DEBUG = args.debug
     start = time.time()    
@@ -655,17 +673,23 @@ if __name__ == '__main__':
     updateLog("Start of run:", str(date.today()))
     args_print = str(args).split(",")[1:]
     updateLog("Arguments", '\n'.join(args_print))
-    if args.pvals:
+    if args.pvals != "ALL":
         t = (args.pvals).strip().split(",")
-        pvals = [float(x) for x in t]
-        updateLog("Pvals to asses:", str(args.pvals))
+    else:
+        t=["5e-8", "1e-6", "1e-5", "1e-4", "1e-3", "0.01", "0.05", "0.1", "0.2", "0.3", "0.4", "0.5", "1"]
+    pvals = [float(x) for x in t]
+    updateLog("Pvals to asses:", str(",".join(t)))
+    
     if args.reset_ids:
         VAR_IN_ID = False #Variant information is not included in genotype id
     if args.preprocessing_done:
+        if not args.clump:
+            print("If preprocessing is already completed, please specify the plink.clumped file for reference. Program will terminate")
+            sys.exit()
         updateLog("Assuming data preprocessing- including filtering by summary stats, aligning references, and clumping- has already been completed. Proceeding with PRS calculations...", True)
     if not args.prefiltered_ss and not args.preprocessing_done:
         print("Filtering ambiguous SNPs and indels from SS data...")
-        args.sum_stats = filterSumStatSNPs(args.sum_stats, args.ss_format)
+        args.sum_stats = filterSumStatSNPs(args.sum_stats, args.ss_format, args.no_ambiguous_snps)
         args.ss_format = "DEFAULT" #ID REF ALT BETA PVAL
         updateLog("Ambiguous SNPs and indels removed. Filtered summary statistics written out to", args.sum_stats, True)
     if args.align_ref and not args.preprocessing_done:
@@ -679,12 +703,13 @@ if __name__ == '__main__':
     num_pat = getPatientCount(args.plink_snps, args.plink_version)
     updateLog("Number of patients detected in sample:", str(num_pat), True)
     updateLog("Time for preprocessing (SNP filtering, reference alignment if specified, etc.):", str(time.time() - start), True)
-    if args.clump and not args.preprocessing_done:
-        ss_parse, geno_ids = plinkClump(args.ld_ref, args.clump_ref,args.clump_r2, geno_ids, ss_parse)
+    if args.clump:
+        ss_parse, geno_ids = plinkClump(args.ld_ref, args.clump_ref,args.clump_r2, args.maf, geno_ids, ss_parse)
     print("Preprocessing complete")
-    if args.only_preprocess:
+    if args.preprocess_only:
+        updateLog("Plink file data has been updated into new_plink.*. Use this in downstream runs.", True)
         sys.exit()
-        
+
     updateLog("Total number of SNPs for use in PRS calculations:", str(getEntryCount(geno_ids,False)))  
     stats_complete = readInSummaryStats(ss_parse)
     snp_indices = indexSSByPval(pvals,stats_complete)
