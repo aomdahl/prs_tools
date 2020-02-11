@@ -29,11 +29,18 @@ ALT = "ALT" #Alternate allele
 INDEX = 0
 B = 1
 global VAR_IN_ID
+MEMORY = ""
 VAR_IN_ID = True #Variants are included in ID, assumed by default
 DEBUG = True        
 DEBUG_DAT = dict()
 LOG="log_file.txt"
 
+def memoryAllocation(set_as = ""):
+    global MEMORY   
+    if set_as != "":
+        MEMORY = " --memory " + str(set_as)
+    return MEMORY
+    
 def updateLog(*prints): #, std_out = False):
     with open(LOG, 'a') as ostream:
         if prints[-1] == True:
@@ -139,8 +146,9 @@ def prepSNPIDs(snp_file, ss_file, ss_type, vplink = 2, max_p = 1):
         sys.exit() 
     geno_id_list = "geno_ids.f"
     inter_sum_stats = "ss_filt.f" #Intersected summary stats with genotype ids
-    #If we have already generated our geno_id_list,skip this tep 
-    if not os.path.isfile(geno_id_list) or not VAR_IN_ID: #If we've already done this step, no point in doing more work....   
+    #If we have already generated our geno_id_list,skip this step:
+        #Logic as follows: if the geno_ids.f file doesn't exist, or the variant IDs haven't been set to 1:123:R:A or the geno_ids file has size 0, start from scratch 
+    if not os.path.isfile(geno_id_list) or not VAR_IN_ID or os.stat(geno_id_list).st_size == 0 : #If we've already done this step, no point in doing more work....   
         if not VAR_IN_ID: #need to rework the IDs so they are chr:pos:ref:alt
             local_geno = "local_geno.pvar" #We will be making our own pvar
             command = ''' awk '(!/##/ && /#/) {print $1"\t"$2"\tID\t"$4"\t"$5} (!/#/) {print $1"\t"$2"\t"$1":"$2":"$4":"$5"\t"$4"\t"$5}' ''' + snp_file + ".pvar > " + local_geno
@@ -217,8 +225,9 @@ def hashMapBuild(ss_snps, plink_snps, ret_tap):
         try:
             ret_tap[j] = int(pref[curr_id])
         except KeyError:
+            #This error would occur if there are fewer snps in our output matrix than in our file
             print("Unable to find a match for ", curr_id)
-            updateLog(str(pref)) 
+            #updateLog(str(pref)) 
             ret_tap[j] = -1
             updateLog("Found unmatched ID, ", curr_id, "Please investigate.")
     print("Re-indexing complete")
@@ -320,6 +329,12 @@ def linearGenoParse(snp_matrix, snp_indices,pvals, scores, ss_ids):
                     except TypeError:
                         print("Unexpected error for", p, sel, rel_data)
                         sys.exit()
+                    except ValueError:
+                        patient_num = rel_data[0]
+                        updateLog("Patient ", patient_num, "has missing entries and will not be scored at",p,"threshold", True)
+                        scores[p] = NaN
+                        prev_score = new_score
+                        continue #don't calculate the score, simply proceed to the next iteration of p. 
                     if first_pval:
                         new_score = scoreCalculation(new_genos, snp_indices[p][B])
                         scores[p].append(new_score)
@@ -404,9 +419,13 @@ def alignReferenceByPlink(old_plink,plink_version, ss, ss_type):
         #12/12 adding an additional call to filter stuff
         #Filter out multi-allelic snps and X
         #We need to do this before we can align, otherwise plink generates errors 
-        plink_call_first = "plink2" + ftype + old_plink + " --make-pgen --out filtered_target --exclude remove_multi.t --not-chr X"
-        check_call(plink_call_first, shell = True)
-        plink_call = "plink2 --pfile filtered_target --ref-allele force aligner.t --make-pgen --out new_plink"
+        try:
+            plink_call_first = "plink2" + ftype + old_plink + " --make-pgen --out filtered_target --exclude remove_multi.t --not-chr X" + memoryAllocation()
+            check_call(plink_call_first, shell = True)
+        except subprocess.CalledProcessError:
+            updateLog("We have encountered an error calling plink2. Are all of your file paths corrected? Do you have plink2 installed. It can be found at https://www.cog-genomics.org/plink/2.0/", True)
+            sys.exit() 
+        plink_call = "plink2 --pfile filtered_target --ref-allele force aligner.t --make-pgen --out new_plink" + memoryAllocation()
         #plink_call = "plink2" + ftype + old_plink + " --ref-allele aligner.t --make-pgen --out new_plink"
         check_call(plink_call, shell = True)
     except:
@@ -560,7 +579,7 @@ def plinkToMatrix(snp_keep, args, local_pvar, vplink):
     if vplink == 1:
         syscall = " --bfile "
         annot = " --bim "
-    call = "plink2 " + syscall  + args + annot + local_pvar + " --geno --not-chr X --extract " + snp_keep + " --out mat_form_tmp --export A"
+    call = "plink2 " + syscall  + args + annot + local_pvar + " --geno --not-chr X --extract " + snp_keep + " --out mat_form_tmp --export A" + memoryAllocation()
     check_call(call, shell = True) 
     #--geno removes snps with more than 10% missing from the data.
     print("User-readable genotype matrix generated")
@@ -590,7 +609,7 @@ def plinkClump(reference_ld, clump_ref,clump_r, maf_thresh, geno_ids, ss):
         check_call(command, shell = True)
         #Run plink clumping
         #DO not use --clump-best
-        plink_command = "plink --bfile " + reference_ld + " --clump clump_ids.tmp --clump-p1 1 --clump-p2 1 --clump-r2 " + str(clump_r) + " --clump-kb 250 --clump-field P --clump-snp-field SNP --maf " + str(maf_thresh)
+        plink_command = "plink --bfile " + reference_ld + " --clump clump_ids.tmp --clump-p1 1 --clump-p2 1 --clump-r2 " + str(clump_r) + " --clump-kb 250 --clump-field P --clump-snp-field SNP --maf " + str(maf_thresh) + memoryAllocation()
         updateLog(plink_command)
         check_call(plink_command, shell = True)
         clump_file = "plink.clumped" #The default output name with flag clump
@@ -657,7 +676,7 @@ if __name__ == '__main__':
     parser.add_argument("--prefiltered_ss", default = False, action = "store_true", help = "Specify this option if you have already filter summary stats for ambiguous SNPs, bi-alleleic variants, NAs. Recommended for speed.")
     parser.add_argument("--reset_ids", action = "store_true", help = "By default, program assumes genotype ids are in the form chr:loc:ref:alt. Specify this argument if this is NOT the case to.")
     parser.add_argument("--clump", help = "Specify if you wish to do clumping. Option to pass in a plink clumping file or the reference panel plink data.", action = "store_true", required = "--ld_ref" in sys.argv or "--clump_ref" in sys.argv)
-    parser.add_argument("--ld_ref", default = None, help = "Specify an LD reference panel, required if you want to do clumping. Pass in plink1.9 format please.")
+    parser.add_argument("--ld_ref", default = None, help = "Specify an LD reference panel, required if you want to do clumping. Pass in plink1.9 format please, and ensure that all SNP ids have the form chr:pos (i.e. 1:2345).")
     parser.add_argument("--clump_r2", default = 0.25, help = "Specify the clumping threshold.")
     parser.add_argument("--debug", help = "Specify this if you wish to output debug results", default = False, action = "store_true")
     parser.add_argument("--clump_ref", help = "Specify this option if you wish to perform clumping and already have a plink clump file produced (the output of plink1.9 clumping). Provide the path to this file.", default = "NA")
@@ -666,6 +685,7 @@ if __name__ == '__main__':
     parser.add_argument("--preprocess_only", action = "store_true", help = "Specify this option if you would like to terminate once preprocessing of SNPs (including aligning reference, removing ambiguous SNPs, preparing summary stat sublist) has completed.")
     parser.add_argument("--OVERRIDE", help = "Use for deubgging- pass the matrix in")
     parser.add_argument("--no_ambiguous_snps", help = "Specify this if you wish to remove all ambiguous SNPs whatsover, regardless of MAF. Default is to keep those with MAF > 0.4", action = "store_true", default = False)
+    parser.add_argument("--memory", help = "Specify memory allocation in MB for tasks called in plink. Default omits this argument", default = "")
     args = parser.parse_args()
     DEBUG = args.debug
     start = time.time()    
@@ -679,7 +699,7 @@ if __name__ == '__main__':
         t=["5e-8", "1e-6", "1e-5", "1e-4", "1e-3", "0.01", "0.05", "0.1", "0.2", "0.3", "0.4", "0.5", "1"]
     pvals = [float(x) for x in t]
     updateLog("Pvals to asses:", str(",".join(t)))
-    
+    memoryAllocation(set_as = args.memory)
     if args.reset_ids:
         VAR_IN_ID = False #Variant information is not included in genotype id
     if args.preprocessing_done:
