@@ -229,7 +229,7 @@ def hashMapBuild(ss_snps, plink_snps, ret_tap):
             print("Unable to find a match for ", curr_id)
             #updateLog(str(pref)) 
             ret_tap[j] = -1
-            updateLog("Found unmatched ID, ", curr_id, "Please investigate.")
+            updateLog("Found unmatched ID, ", curr_id, ". May be due to SNPs removed that don't pass the call rate (--geno); see mat_form_tmp.log file. If this is not the case, please investigate further.")
     print("Re-indexing complete")
     return ret_tap
         
@@ -419,8 +419,9 @@ def alignReferenceByPlink(old_plink,plink_version, ss, ss_type):
         #12/12 adding an additional call to filter stuff
         #Filter out multi-allelic snps and X
         #We need to do this before we can align, otherwise plink generates errors 
+        #feb/11- added --geno to filter variants with missing call rates > 10%. This is also done later, but better done here.
         try:
-            plink_call_first = "plink2" + ftype + old_plink + " --make-pgen --out filtered_target --exclude remove_multi.t --not-chr X" + memoryAllocation()
+            plink_call_first = "plink2" + ftype + old_plink + " --geno --make-pgen --out filtered_target --exclude remove_multi.t --not-chr X" + memoryAllocation()
             check_call(plink_call_first, shell = True)
         except subprocess.CalledProcessError:
             updateLog("We have encountered an error calling plink2. Are all of your file paths corrected? Do you have plink2 installed. It can be found at https://www.cog-genomics.org/plink/2.0/", True)
