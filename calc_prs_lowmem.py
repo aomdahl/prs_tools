@@ -268,7 +268,7 @@ def buildVarMap(plink_order, ss_order):
     search_count = 0
     return ret
     
-def linearGenoParse(snp_matrix, snp_indices,pvals, scores, ss_ids):
+def linearGenoParse(snp_matrix, snp_indices,pvals, scores, ss_ids, writeSNPListsOnly = True):
     """
     Parse the patient file
     @param snp_matrix -- the path to the massive genotype file
@@ -276,6 +276,7 @@ def linearGenoParse(snp_matrix, snp_indices,pvals, scores, ss_ids):
     @param scores -- what is returned, stores the scores
     @param pvals -- which pvalues we measure at
     @param ss_ids -- the list of ids from the summary stats list, for ordering purposes
+    @param writeSNPLists - basically a dummy variable to .
     """
     patient_ids = list()
     report_index = 100
@@ -286,7 +287,8 @@ def linearGenoParse(snp_matrix, snp_indices,pvals, scores, ss_ids):
         while dat:
             if line_counter == 0:
                 var_map = buildVarMap(dat[6:], ss_ids)
-                if DEBUG: DEBUG_DAT[REFID] = dat[6:]
+                if DEBUG or writeSNPListsOnly: 
+                    DEBUG_DAT[REFID] = dat[6:]
                 print("Proceeding with line-by-line calculation now...")
                 first_pval = True
                 prev = 0
@@ -297,8 +299,7 @@ def linearGenoParse(snp_matrix, snp_indices,pvals, scores, ss_ids):
                     else:
                         updateLog("Number of final SNPs used at ", str(p), "pvalue level:", str(len(snp_indices[p][INDEX]) + prev))
                     prev = prev + len(snp_indices[p][INDEX])
-                if DEBUG:
-                    print("Writing out requested debug information")
+                if DEBUG or writeSNPListsOnly:
                     DEBUG_DAT[BETA] = dict()
                     DEBUG_DAT[SNP] = dict()
                     prev_append_snp = []
@@ -376,7 +377,7 @@ def calculatePRS(pvals, snp_matrix, snp_indices, snp_list):
     print("Calculation and read in time:", str(end-start))
     return scores, patient_ids
 
-def alignReferenceByPlink(old_plink,plink_version, ss, ss_type):
+def alignReferenceByPlink(old_plink,plink_version, ss, ss_type, plink_path):
     """
     Make the reference file listing <IDs> <REF>
     Call plink to swap them
@@ -421,12 +422,12 @@ def alignReferenceByPlink(old_plink,plink_version, ss, ss_type):
         #We need to do this before we can align, otherwise plink generates errors 
         #feb/11- added --geno to filter variants with missing call rates > 10%. This is also done later, but better done here.
         try:
-            plink_call_first = "plink2" + ftype + old_plink + " --geno --make-pgen --out filtered_target --exclude remove_multi.t --not-chr X" + memoryAllocation()
+            plink_call_first = plink_path + "plink2" + ftype + old_plink + " --geno --make-pgen --out filtered_target --exclude remove_multi.t --not-chr X" + memoryAllocation()
             check_call(plink_call_first, shell = True)
         except subprocess.CalledProcessError:
             updateLog("We have encountered an error calling plink2. Are all of your file paths corrected? Do you have plink2 installed. It can be found at https://www.cog-genomics.org/plink/2.0/", True)
             sys.exit() 
-        plink_call = "plink2 --pfile filtered_target --ref-allele force aligner.t --make-pgen --out new_plink" + memoryAllocation()
+        plink_call = plink_path + "plink2 --pfile filtered_target --ref-allele force aligner.t --make-pgen --out new_plink" + memoryAllocation()
         #plink_call = "plink2" + ftype + old_plink + " --ref-allele aligner.t --make-pgen --out new_plink"
         check_call(plink_call, shell = True)
     except:
@@ -519,8 +520,6 @@ def filterSumStatSNPs(ss, ss_type, keep_ambig_filter):
         ss_t["ID"] = ss_t.location + ":" +  ss_t.REF + ":" + ss_t.ALT
         ss_t = ss_t[["ID", REF, ALT, BETA,PVAL]]
     elif ss_type == "DEFAULT":
-        print("Are you sure you want to re-filter the summary stats? It appears they may have already been filtered...")
-        input()
         #[ID REF ALT beta pval]
         ss_t = pd.read_csv(ss, sep = '\t')
         sizes["start"] = ss_t.shape[0]
@@ -560,7 +559,7 @@ def filterSumStatSNPs(ss, ss_type, keep_ambig_filter):
     ss_t.to_csv(out_name, sep = '\t', index = False) 
     return out_name
 
-def plinkToMatrix(snp_keep, args, local_pvar, vplink):
+def plinkToMatrix(snp_keep, args, local_pvar, vplink, plink_path):
     """
     Create a matrix with scores we can parse
     @param snp_keep is the path to the file with the SNP list. Currently just a single column, TODO check if this will work for plink filtering.
@@ -580,7 +579,7 @@ def plinkToMatrix(snp_keep, args, local_pvar, vplink):
     if vplink == 1:
         syscall = " --bfile "
         annot = " --bim "
-    call = "plink2 " + syscall  + args + annot + local_pvar + " --geno --not-chr X --extract " + snp_keep + " --out mat_form_tmp --export A" + memoryAllocation()
+    call = plink_path + "plink2 " + syscall  + args + annot + local_pvar + " --geno --not-chr X --extract " + snp_keep + " --out mat_form_tmp --export A" + memoryAllocation()
     check_call(call, shell = True) 
     #--geno removes snps with more than 10% missing from the data.
     print("User-readable genotype matrix generated")
@@ -666,7 +665,7 @@ def writeScoresDebug(debug_tab, destination):
 
 if __name__ == '__main__':
 
-    parser = argparse.ArgumentParser(description = "Basic tools for calculating rudimentary Polygenic Risk Scores (PRSs). This uses PLINK bed/bim/fam files and GWAS summary stats as standard inputs. Please use PLINK 2, and ensure that there are no multi-allelic SNPs")
+    parser = argparse.ArgumentParser(description = "Basic tools for calculating rudimentary Polygenic Risk Scores (PRSs). This uses PLINK bed/bim/fam files and GWAS summary stats as standard inputs. Current version requires both plink2 and plink1")
     parser.add_argument("-snps", "--plink_snps", help = "Plink file handle for actual SNP data (omit the .extension portion)")
     parser.add_argument("--preprocessing_done", action = "store_true", help = "Specify this if you have already run the first steps and generated the plink2 matrix with matching IDs. Mostly for development purposes.")
     parser.add_argument("-ss", "--sum_stats", help = "Path to summary stats file. Be sure to specify format if its not DEFAULT. Assumes tab delimited", required = True)
@@ -687,6 +686,7 @@ if __name__ == '__main__':
     parser.add_argument("--OVERRIDE", help = "Use for deubgging- pass the matrix in")
     parser.add_argument("--no_ambiguous_snps", help = "Specify this if you wish to remove all ambiguous SNPs whatsover, regardless of MAF. Default is to keep those with MAF > 0.4", action = "store_true", default = False)
     parser.add_argument("--memory", help = "Specify memory allocation in MB for tasks called in plink. Default omits this argument", default = "")
+    parser.add_argument("--plink2_path", help = "Specify the path to plink2 if its not in your PATH variable", default = "") 
     args = parser.parse_args()
     DEBUG = args.debug
     start = time.time()    
@@ -714,7 +714,7 @@ if __name__ == '__main__':
         args.ss_format = "DEFAULT" #ID REF ALT BETA PVAL
         updateLog("Ambiguous SNPs and indels removed. Filtered summary statistics written out to", args.sum_stats, True)
     if args.align_ref and not args.preprocessing_done:
-        args.plink_snps = alignReferenceByPlink(args.plink_snps, args.plink_version, args.sum_stats, args.ss_format) #Make a local copy of the data with the updated genotype
+        args.plink_snps = alignReferenceByPlink(args.plink_snps, args.plink_version, args.sum_stats, args.ss_format, args.plink2_path) #Make a local copy of the data with the updated genotype
         print("A new plink2 fileset with matched reference sequences has been generated", args.plink_snps)
         updateLog("Strand flips have been corrected for. Proceeding with analysis", True)
         args.plink_version = 2 #We have updated the type to 2
@@ -737,7 +737,7 @@ if __name__ == '__main__':
     if args.OVERRIDE:
         snp_matrix = args.OVERRIDE
     else:
-        snp_matrix = plinkToMatrix(geno_ids, args.plink_snps, local_pvar, args.plink_version) 
+        snp_matrix = plinkToMatrix(geno_ids, args.plink_snps, local_pvar, args.plink_version, args.plink2_path) 
     print("Parsing the genotype file...")
     scores, patient_ids = calculatePRS(pvals, snp_matrix, snp_indices,stats_complete[REFID])
     
