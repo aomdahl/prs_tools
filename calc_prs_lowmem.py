@@ -46,10 +46,10 @@ def updateLog(*prints): #, std_out = False):
         if prints[-1] == True:
             for i in range(0, len(prints)-1):
                 print(prints[i])
-                ostream.write(prints[i] + ' ')
+                ostream.write(str(prints[i]) + ' ')
         else:
             for a in prints:
-                ostream.write(a + " ")
+                ostream.write(str(a) + " ")
         ostream.write("\n")
     
 def getEntryCount(fin, header):
@@ -161,6 +161,8 @@ def prepSNPIDs(snp_file, ss_file, ss_type, vplink = 2, max_p = 1):
                 print("Unable to generate modified pvar/bim file. Are you sure you specified the correct plink version?")
                 updateLog("Failed on command", command, True)
                 sys.exit()
+        if VAR_IN_ID and os.path.isfile("local_geno.pvar") and os.stat("local_geno.pvar") != 0:
+            local_geno = "local_geno.pvar" 
         if vplink == 2:
             command_n = "awk ' (NR> 1 && $1 !~ /X/) {print $3}' " + local_geno + " > " + geno_id_list
         else:
@@ -308,7 +310,16 @@ def linearGenoParse(snp_matrix, snp_indices,pvals, scores, ss_ids, writeSNPLists
                         snp_index = snp_indices[p][INDEX]
                         sel = var_map[snp_index] 
                         DEBUG_DAT[BETA][p] = snp_indices[p][B]
-                        DEBUG_DAT[SNP][p] = ((itemgetter(*sel)(dat[6:])))
+                        try:
+                            DEBUG_DAT[SNP][p] = ((itemgetter(*sel)(dat[6:])))
+                        except TypeError as e:
+                            print(e)
+                            print("SNP ID", SNP)
+                            print("Pvalue", p)
+                            print("Errors detected in matrix header. Will not print snps used.")
+                            continue
+                       #     print(SNP, p, 
+                       #     sys.exit()
                         DEBUG_DAT[BETA][p] = np.concatenate((DEBUG_DAT[BETA][p],prev_append_beta))
                         DEBUG_DAT[SNP][p] = np.concatenate((DEBUG_DAT[SNP][p], prev_append_snp))
                         prev_append_snp = DEBUG_DAT[SNP][p]
@@ -316,7 +327,7 @@ def linearGenoParse(snp_matrix, snp_indices,pvals, scores, ss_ids, writeSNPLists
                     writeScoresDebug(DEBUG_DAT[SNP], "debug_vals_snps.tsv")
                     writeScoresDebug(DEBUG_DAT[BETA], "debug_vals_betas.tsv")
             else:
-                patient_ids.append(dat[0])
+                patient_ids.append(str(dat[0]))
                 
                 first_pval = True
                 rel_data = dat[6:]
@@ -327,10 +338,10 @@ def linearGenoParse(snp_matrix, snp_indices,pvals, scores, ss_ids, writeSNPLists
                     try:
                         sel = (itemgetter(*snp_index)(var_map))
                         new_genos = np.array(itemgetter(*sel)(rel_data), dtype = np.float64)
-                    except TypeError:
-                        print("Unexpected error for", p, sel, rel_data)
-                        sys.exit()
-                    except ValueError:
+                    #except TypeError:
+                        #print("Unexpected error for", p, sel, rel_data)
+                    #    sys.exit()
+                    except:
                         patient_num = rel_data[0]
                         updateLog("Patient ", patient_num, "has missing entries and will not be scored at",p,"threshold", True)
                         scores[p] = NaN
@@ -422,7 +433,7 @@ def alignReferenceByPlink(old_plink,plink_version, ss, ss_type, plink_path):
         #We need to do this before we can align, otherwise plink generates errors 
         #feb/11- added --geno to filter variants with missing call rates > 10%. This is also done later, but better done here.
         try:
-            plink_call_first = plink_path + "plink2" + ftype + old_plink + " --geno --make-pgen --out filtered_target --exclude remove_multi.t --not-chr X" + memoryAllocation()
+            plink_call_first = plink_path + "plink2" + ftype + old_plink + " --geno 0 --make-pgen --out filtered_target --exclude remove_multi.t --not-chr X" + memoryAllocation()
             check_call(plink_call_first, shell = True)
         except subprocess.CalledProcessError:
             updateLog("We have encountered an error calling plink2. Are all of your file paths corrected? Do you have plink2 installed. It can be found at https://www.cog-genomics.org/plink/2.0/", True)
@@ -436,6 +447,8 @@ def alignReferenceByPlink(old_plink,plink_version, ss, ss_type, plink_path):
     if not DEBUG:
         if os.path.isfile("filtered_target.pvar"):
             check_call("rm filtered_target*", shell = True) 
+        clean_up = "rm remove_multi.t"
+        check_call(clean_up, shell = True)
         clean_up = "rm aligner.t"
         check_call(clean_up, shell = True)
     return "new_plink"
@@ -579,7 +592,7 @@ def plinkToMatrix(snp_keep, args, local_pvar, vplink, plink_path):
     if vplink == 1:
         syscall = " --bfile "
         annot = " --bim "
-    call = plink_path + "plink2 " + syscall  + args + annot + local_pvar + " --geno --not-chr X --extract " + snp_keep + " --out mat_form_tmp --export A" + memoryAllocation()
+    call = plink_path + "plink2 " + syscall  + args + annot + local_pvar + " --geno 0 --not-chr X --extract " + snp_keep + " --out mat_form_tmp --export A" + memoryAllocation()
     check_call(call, shell = True) 
     #--geno removes snps with more than 10% missing from the data.
     print("User-readable genotype matrix generated")
@@ -705,8 +718,10 @@ if __name__ == '__main__':
         VAR_IN_ID = False #Variant information is not included in genotype id
     if args.preprocessing_done:
         if not args.clump:
-            print("If preprocessing is already completed, please specify the plink.clumped file for reference. Program will terminate")
-            sys.exit()
+            print("Please note that you have not provided clumping data, so no clumping will be performed.")
+        #if not args.clump:
+        #    print("If preprocessing is already completed, please specify the plink.clumped file for reference. Program will terminate")
+        #    sys.exit()
         updateLog("Assuming data preprocessing- including filtering by summary stats, aligning references, and clumping- has already been completed. Proceeding with PRS calculations...", True)
     if not args.prefiltered_ss and not args.preprocessing_done:
         print("Filtering ambiguous SNPs and indels from SS data...")
