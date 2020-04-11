@@ -12,7 +12,7 @@ import sys
 import subprocess
 from subprocess import check_call 
 import os
-from datetime import date
+import datetime
 import time
 import multiprocessing as mp
 from operator import itemgetter
@@ -136,14 +136,60 @@ class MissingGenoHandler:
 class SNPIndexManager:
     def __init__(self, pvals, ss = None): #Default constructor
         self.snp_indices = dict()
-        self.var_map = None
+        self.var_map = None #maps summary stat variants (index) to genotype/plink file variants (value)
+        self.var_map_ids = None #maps variant ids to genotype/plink index
+        self.ss_map_ids = None #maps variatn ids to summary stat index
+        self.variant_to_pval = dict() #Lists the p-value category of each variant
         self.geno_extraction_map = dict() #for each p values, the indices to get the genotype information out 
+        self.geno_subset_extraction_maps = list()
         self.pvals = pvals
         self.ss_counts = dict()
+        self.subsets = list() #Store subsets we wish to score separately on, if they exist.
+        self.subsets_var_map = list()
+        self.var_map_index = { p : dict() for p in self.pvals} #this has the 
+        
         if ss is not None:
             self.indexSSByPval(ss) #this updates snp_indices
             for p in self.pvals:
                 self.ss_counts[p] = len(self.snp_indices[p][INDEX])
+    
+    def addSubsets(self, subs):
+        if len(subs) == 0:
+            self.subsets_var_map.append({ p : [] for p in self.pvals})
+            print("No subsets of SNPs included")
+            return
+        self.subsets = subs
+        for i in subs:
+            #self.subsets.append(i)
+            self.subsets_var_map.append({ p : [] for p in self.pvals}) #Add a dictionary for each subset, indexed in order.
+        #print(self.subsets)
+
+    def numVariantSubsets(self):
+        print("we've got subsets,", len(self.subsets) + 1)
+        return len(self.subsets) + 1 #The main subset must be counted, so always at least 1
+    def __syncSubsets(self):
+        """
+        Map each subset to the main dataset- store the indices for all the entries
+        """
+        if self.var_map is None: #Only if we have already done 
+            raise Exception("Variant map has not been set. Program will terminate")
+            sys.exit()
+        self.geno_subset_extraction_maps = [None] * len(self.subsets)
+        for i, subset_path in enumerate(self.subsets):
+            with open(subset_path, 'r') as istream:
+                for line in istream:
+                    snp = line.strip() 
+                    if snp not in self.ss_map_ids:
+                        updateLog("Subset SNP " + str(snp) +   " not in full list and will be omitted", False)
+                    else:
+                        try:
+                            pval_cat= self.variant_to_pval[snp] #get the pval group the snp is in
+                            index = self.var_map_index[pval_cat][snp] #get the index in the var_map its in
+                            #index = self.ss_map_ids[snp]
+                            self.subsets_var_map[i][pval_cat].append(index) #this gives the index in the variant map we want for each pvalue
+                            #pval:[1,5,1123,55], pval2:[55,12,125]...
+                        except:
+                            print("Missing the snp, will skip")
 
     def getSNPCount(self, p):
         try:
@@ -159,22 +205,63 @@ class SNPIndexManager:
     def getIndexedBetas(self, p):
         return self.snp_indices[p][B]
 
+    def getAllIndexedBetas(self, p):
+        ret_list = [self.snp_indices[p][B]]
+        for subset in  self.geno_subset_extraction_maps:
+            ret_list.append(subset[p][B])
+        return ret_list
+
+    def resetSNPIndex(self):
+        self.var_map = None
+        self.var_map_ids = None
+
+    #Method for determine if IDs are in the right order
+    #Doesn't check every id, just samples a few to improve our confidence that we have the same order
+    #By checking >= 5 locations at random and ensuring they are the same. 
+    #If each position is equally likely for each entry, then the probability of having different entries by chance
+    #For this many checks is really small (i.e. (1/number of snps)^5).
+    def __quickIDCheck(self, ss_order, plink_order):
+        #Try a number of samples to you get a high certainty
+        PROB_ACC = 0.0000001
+        import random
+        try:
+            min_run = (np.log(PROB_ACC) / np.log(1/float(len(ss_order))))
+        except ZeroDivisionError:
+            print("Error in reading in ids from summary stats >_<")
+            sys.exit()
+        for i in range(0, int(min_run)+5): #I want to do at least 5. Actually a better way may be to sum up the ids across an interval and see if those are the same
+            rand = random.randint(0, len(ss_order))
+            try:
+                if plink_order[rand][:-2] != ss_order.iloc[rand]:
+                    print("SNP order not aligned, realigning now...")
+                    return False
+            except IndexError:
+                #print(plink_order, rand, ss_order)
+                print("Note that plink order and ss_order have different lengths")
+                return False
+        return True
+
     def mapSStoGeno(self, geno_order, ss_order): #Previously buildVarMap
         """
             Return a numpy array that maps an index in the ss file to a number in plink
             TODO: Speed up this step, its too slow
         """
-        if quickIDCheck(ss_order, geno_order):
-            self.var_map =  np.array(range(0, len(ss_order) + 1)) 
-        else:
-            self.var_map = self.__hashMapBuild(ss_order, geno_order) 
+        #if self.__quickIDCheck(ss_order, geno_order):
+        #    self.var_map =  np.array(range(0, len(ss_order) + 1)) 
+        #else:
+        print("mapping in all cases now. Update when time is right.")
+        self.var_map, self.var_map_ids, self.ss_map_ids = self.__hashMapBuild(ss_order, geno_order) 
 
-    def __hashMapBuild(self, ss_snps, plink_snps):
+    def __hashMapBuild(self, ss_snps, plink_snps): #add functionality of a map too
         """
         Create a mapping of SNPs in the SS data to the corresponding SNP in the genotype data.
+        @return ret_tap:  numpy array where index corresponds to summary stat variant, and the entry is the index of the plink data genotype
+        @return pref: a dictionary of snp ids: index (from the plink data). 
+        @r
         """
         ret_tap = np.zeros(len(ss_snps), dtype = np.int32)
         pref = dict()
+        ss_pref = dict()
         import re
         #Put all of the plink genotype SNPs into a dictionary for fast lookup
         for i in range(0, len(plink_snps)):
@@ -188,14 +275,23 @@ class SNPIndexManager:
         ss_snp_names = ss_snps.values
         for j in range(0, len(ss_snps)):
             curr_id = ss_snp_names[j]
+            #Modified on march 4- if we are using the subsetting argument, there will be times we fail to find a match
+            ss_pref[curr_id] = j
+            if curr_id in pref:
+                ret_tap[j] = int(pref[curr_id])
+            else:
+                ret_tap[j] = -1
+            """
+            TODO: add ability to write those out to another file
             try:
                 ret_tap[j] = int(pref[curr_id])
             except KeyError:
                 print("Unable to find a match for ", curr_id)
                 ret_tap[j] = -1
                 updateLog("Found unmatched ID, ", curr_id, ". May be due to SNPs removed that don't pass the call rate (--geno); see mat_form_tmp.log file. If this is not the case, please investigate further.")
+                """
         print("Re-indexing complete")
-        return ret_tap
+        return ret_tap, pref, ss_pref
 
     def indexSSByPval(self, ss, method = "split"):
         """
@@ -206,15 +302,20 @@ class SNPIndexManager:
         listed relative to the next smallest SNP, for the way we calculate downstream 
         """
         self.pvals.sort() #smallest one first
-        if method != "split": #don't bin the p-values
+        if method != "split": #don't bin the p-values, default is to bin. We could end it here though.
             for p in self.pvals:
                 samp = ss[(ss[PVAL] <= float(p))]
-                self.snp_indices[p] = [samp.index.values.tolist(), samp[BETA].values]      
+                self.snp_indices[p] = [samp.index.values.tolist(), samp[BETA].values] 
+                self.variant_to_pval.update(zip(samp[REFID].tolist(),[p]*samp.shape[0]))
+     
         prev = -1
         for p in self.pvals:
             samp = ss[(ss[PVAL] <= float(p)) & (ss[PVAL] > prev)]
             self.snp_indices[p] = [samp.index.tolist(), samp[BETA].values]
+            #Keep track of where in the list each variant is 
+            self.var_map_index[p] = dict(zip(samp[REFID], list(range(0, len(samp))))) #Each Id has its location
             prev = float(p) 
+            self.variant_to_pval.update(zip(samp[REFID].tolist(),[p]*samp.shape[0]))
 
     def getSumStatSNPIndex(self, p):
         return self.snp_indices[p][INDEX]
@@ -229,11 +330,48 @@ class SNPIndexManager:
                 self.geno_extraction_map[p] = []
 
     def getGenoIndices(self, p): #formerly buildExtractionlist
+        input("calling geno indices partial")
         if not self.geno_extraction_map: #its empty
             self.__buildExtractionList()
+            self.__syncSubsets()
         return self.geno_extraction_map[p]
 
-    
+    def __buildSubsetExtractionLists(self):
+        """
+        Update the subset lists to contain the relevant extracted values for scoring along with the Betas.
+        """
+        print("Building the subset extraction lists....")
+        for i,subset in enumerate(self.subsets_var_map): #ordered subsets.
+            self.geno_subset_extraction_maps[i] = { p : [[],[]] for p in self.pvals} #make each a tuple, with betas in one and 
+            for p in self.pvals:
+                curr_p_indices = subset[p]
+                #Make sure its not empty
+                #POSSIBLE ERROR SORUCE HERE.
+                if len(curr_p_indices) > 0 and len(self.snp_indices[p][INDEX]) > 0:
+                    converted_indices = ((itemgetter(*curr_p_indices)(self.snp_indices[p][INDEX])))
+                    converted_betas = ((itemgetter(*curr_p_indices)(self.snp_indices[p][B])))
+                    if len(converted_indices) > 0:
+                        ret_app = (itemgetter(*converted_indices)(self.var_map))
+                    else:
+                        ret_app =  []
+                else:
+                    ret_app = []
+                    converted_betas = []
+
+                self.geno_subset_extraction_maps[i][p][INDEX] = ret_app
+                self.geno_subset_extraction_maps[i][p][B] = converted_betas
+        return
+
+    def getAllGenoIndices(self, p):
+        if not self.geno_extraction_map or not self.geno_subset_extraction_maps: #its empty
+            self.__buildExtractionList()
+            self.__syncSubsets()
+            self.__buildSubsetExtractionLists()
+        ret_list = [self.geno_extraction_map[p]]
+        for subset in self.geno_subset_extraction_maps: #ordered subsets.
+            ret_list.append(subset[p][INDEX])
+        return ret_list
+
 
 ######################################
 
@@ -250,13 +388,13 @@ def updateLog(*prints):
     """
     with open(LOG, 'a') as ostream:
         if START_SEQ == prints[0]:
-            ostream.write("---------------- New BPRS Run ----------------")
+            ostream.write("\n---------------- New BPRS Run ----------------\n")
         if prints[-1] == True:
             for i in range(0, len(prints)-1):
                 print(prints[i])
                 ostream.write(str(prints[i]) + ' ')
         else:
-            for a in prints:
+            for a in prints[0:-1]:
                 ostream.write(str(a) + " ")
         ostream.write("\n")
     
@@ -292,7 +430,12 @@ def getPatientCount(snp_file, vers):
 def readInSummaryStats(s_path):
     #ID, ref, alt, beta, pvalue. Th
     #BEWARE: may have issue with sep, depending..
-    ss = pd.read_csv(s_path, sep = '\t', header = None,  names = [REFID, REF,ALT, BETA, PVAL], dtype= { REF:'category',ALT: 'category', BETA:'float64', PVAL:'float64'})
+    try:
+        ss = pd.read_csv(s_path, sep = '\t', header = None,  names = [REFID, REF,ALT, BETA, PVAL], dtype= { REF:'category',ALT: 'category', BETA:'float64', PVAL:'float64'})
+    except TypeError:
+        print("It seems that there was an error with the summary statistics data. Did you omit --reset_ids?")
+        print("Also try clearing out all the *.f files in the local directory.")
+        sys.exit()
     print("Data in memory...")
     return ss
 
@@ -357,6 +500,9 @@ def prepSNPIDs(snp_file, ss_file, ss_type, vplink = 2, max_p = 1):
     inter_sum_stats = "ss_filt.f" #Intersected summary stats with genotype ids
     #If we have already generated our geno_id_list,skip this step:
         #Logic as follows: if the geno_ids.f file doesn't exist, or the variant IDs haven't been set to 1:123:R:A or the geno_ids file has size 0, start from scratch 
+    if VAR_IN_ID and os.path.isfile("local_geno.pvar") and os.stat("local_geno.pvar") != 0 and args.preprocessing_done:
+            print("Using the existing pvar file...")
+            local_geno = "local_geno.pvar" 
     if not os.path.isfile(geno_id_list) or not VAR_IN_ID or os.stat(geno_id_list).st_size == 0 : #If we've already done this step, no point in doing more work....   
         if not VAR_IN_ID: #need to rework the IDs so they are chr:pos:ref:alt
             local_geno = "local_geno.pvar" #We will be making our own pvar
@@ -416,85 +562,7 @@ def scoreCalculation(geno, betas):
     except ValueError:
         print("It appears that the number of SNPs is not as expected. We suggest lowering the missing genotype filter threshold, and additional debugging.")   
 
-def hashMapBuild(ss_snps, plink_snps, ret_tap):
-    """
-    Create a mapping of SNPs in the SS data to the corresponding SNP in the genotype data.
-    """
-    pref = dict()
-    import re
-    #Put all of the plink genotype SNPs into a dictionary for fast lookup
-    for i in range(0, len(plink_snps)):
-        if VAR_IN_ID:
-            new_key = re.sub("_[ACGTN]+$", "",plink_snps[i])
-            pref[new_key] = i 
-            #pref[plink_snps[i][:-2]] = i
-        else:
-            print("This portion of code is in development. Please finish, ashton")
-            print("Variants have not be included in ids. Please set the genotype variant ids to be of the form chr:pos:ref:alt, or let this program do it automatically by specifing the --reset_ids tag")          
-    ss_snp_names = ss_snps.values
-    for j in range(0, len(ss_snps)):
-        curr_id = ss_snp_names[j]
-        try:
-            ret_tap[j] = int(pref[curr_id])
-        except KeyError:
-            #This error would occur if there are fewer snps in our output matrix than in our file
-            print("Unable to find a match for ", curr_id)
-            #updateLog(str(pref)) 
-            ret_tap[j] = -1
-            updateLog("Found unmatched ID, ", curr_id, ". May be due to SNPs removed that don't pass the call rate (--geno); see mat_form_tmp.log file. If this is not the case, please investigate further.")
-    print("Re-indexing complete")
-    return ret_tap
-        
-#Method for determine if IDs are in the right order
-#Doesn't check every id, just samples a few to improve our confidence that we have the same order
-#By checking >= 5 locations at random and ensuring they are the same. 
-#If each position is equally likely for each entry, then the probability of having different entries by chance
-#For this many checks is really small (i.e. (1/number of snps)^5).
-def quickIDCheck(ss_order, plink_order):
-    #Try a number of samples to you get a high certainty
-    PROB_ACC = 0.0000001
-    import random
-    try:
-        min_run = (np.log(PROB_ACC) / np.log(1/float(len(ss_order))))
-    except ZeroDivisionError:
-        print("Error in reading in ids from summary stats >_<")
-        sys.exit()
-    for i in range(0, int(min_run)+5): #I want to do at least 5. Actually a better way may be to sum up the ids across an interval and see if those are the same
-        rand = random.randint(0, len(ss_order))
-        try:
-            if plink_order[rand][:-2] != ss_order.iloc[rand]:
-                print("SNP order not aligned, realigning now...")
-                return False
-        except IndexError:
-            print(plink_order, rand, ss_order)
-            print("plink order and ss_order have different lengths, and that's not okay.")
-            return False
-    return True
-
-def buildVarMap(plink_order, ss_order):
-    """
-        Return a numpy array that maps an index in the ss file to a number in plink
-        TODO: Speed up this step, its too slow
-    """
-
-    if quickIDCheck(ss_order, plink_order):
-        return np.array(range(0, len(ss_order) + 1)) 
-     
-    ret = np.zeros(len(ss_order), dtype = np.int32)
-    ret = hashMapBuild(ss_order, plink_order, ret) 
-    return ret
-
-def buildExtractionList(snp_indices, var_map, pvals):
-    ss_snps = dict()
-    gen_snps_ret = dict()
-    for p in pvals:
-        ss_snps[p] = snp_indices[p][INDEX]
-        gen_snps_ret[p] = (itemgetter(*ss_snps[p])(var_map))
-    return gen_snps_ret
-
-
-
-def linearGenoParse(snp_matrix, index_manager,pvals, scores, ss_ids, nsamps, writeSNPListsOnly = True):
+def linearGenoParse(snp_matrix, index_manager,pvals, scores, ss_ids, nsamps, no_nas, writeSNPListsOnly = True):
     """
     Parse the patient file
     @param snp_matrix -- the path to the massive genotype file
@@ -512,15 +580,16 @@ def linearGenoParse(snp_matrix, index_manager,pvals, scores, ss_ids, nsamps, wri
     SNPS_ = PDI["SNPS"]
     pvals.sort() #smallest to largest
     ############Parse the matrix file
+    print("opening", snp_matrix)
     with open(snp_matrix + ".raw", 'r') as istream:
-        sample_counter = 0
+        line_counter = 0
         dat = istream.readline().strip()
         imputer = MissingGenoHandler(index_manager.getSSTotals(),nsamps,pvals) #create the object to handle this....
         pvals.sort()
         while dat:
+            sample_counter = line_counter - 1 #Track which sample we are on, 1 - the line number
             dat = dat.split('\t')
-            if sample_counter == 0:
-                #var_map = buildVarMap(dat[SNPS_:], ss_ids) #index manager
+            if line_counter == 0:
                 index_manager.mapSStoGeno(dat[SNPS_:], ss_ids) #builds a map of variants
                 if DEBUG or writeSNPListsOnly: 
                     DEBUG_DAT[REFID] = dat[SNPS_:]
@@ -543,11 +612,13 @@ def linearGenoParse(snp_matrix, index_manager,pvals, scores, ss_ids, nsamps, wri
                         #snp_index = snp_indices[p][INDEX]
                         #sel = var_map[snp_index] #Putting this in, not sure why we don't have it.
                         #If the snp_index has length 0, then its empty.
-                        if len(index_manager.getGenoIndices(p)) == 0:
+                        #if len(index_manager.getGenoIndices(p)) == 0:
+                        if len(index_manager.getAllGenoIndices(p)[0]) == 0:
                             DEBUG_DAT[SNP][p] = []
                         else:
                             #sel = (itemgetter(*snp_index)(var_map))  #Index manager
-                            sel = index_manager.getGenoIndices(p)
+                            #sel = index_manager.getGenoIndices(p)
+                            sel = index_manager.getAllGenoIndices(p)[0] #I would prefer to keep it the old way, but for working sake.....
                             try:
                                 DEBUG_DAT[SNP][p] = ((itemgetter(*sel)(dat[SNPS_:])))
                             except TypeError as e:
@@ -562,58 +633,68 @@ def linearGenoParse(snp_matrix, index_manager,pvals, scores, ss_ids, nsamps, wri
                         DEBUG_DAT[SNP][p] = np.concatenate((DEBUG_DAT[SNP][p], prev_append_snp))
                         prev_append_snp = DEBUG_DAT[SNP][p]
                         prev_append_beta = DEBUG_DAT[BETA][p]
-                    writeScoresDebug(DEBUG_DAT[SNP], "debug_vals_snps.tsv")
-                    writeScoresDebug(DEBUG_DAT[BETA], "debug_vals_betas.tsv")
+                    writeScoresDebug(DEBUG_DAT[SNP], snp_matrix + ".debug_vals_snps.tsv")
+                    writeScoresDebug(DEBUG_DAT[BETA], snp_matrix + ".debug_vals_betas.tsv")
+                print('SNP order established. Scoring will now begin.')        
             else:
                 rel_data = dat[SNPS_:]
                 patient_id = str(dat[PDI["IID"]])
                 patient_ids.append(patient_id)
                 prev_score = 0
                 new_score = 0
-                #Eventually want to move this to the object, but for now keep it here.
-                #extraction_list = buildExtractionList(snp_indices, var_map,pvals)
-                for p in pvals:
+                
+                for j, p in enumerate(pvals):
                     #snp_index = snp_indices[p][INDEX] #Index manager.
-                    if len(index_manager.getGenoIndices(p)) == 0: #There are 0 snps at this significance level (!) #use the manager
-                        new_score = prev_score + 0
-                        scores[p].append(new_score)
+                    i = 0
+                    for sel, beta in zip(index_manager.getAllGenoIndices(p), index_manager.getAllIndexedBetas(p)):
+                        prev_score = 0
+                        if j > 0:
+                            prev_p = pvals[j-1]
+                            prev_score = scores[i][prev_p][sample_counter]
+                        if len(sel) == 0: #There are 0 snps at this significance level (!) #use the manager
+                            new_score = prev_score + 0
+                            scores[i][p][sample_counter] = new_score
+                            if DEBUG: updateLog(str(patient_ids[-1]), str(new_score))
+                            continue
+                        #sel = index_manager.getGenoIndices(p) #This returns a list of Genotype indices for full first, and then a list for each subset
+                        try:
+                            new_genos = np.genfromtxt(itemgetter(*sel)(rel_data), dtype = np.float64) #Maybe do a time comparison of this one and the previous...
+                            if not no_nas:
+                                if len(index_manager.getAllGenoIndices(p)) > 1: #If we are snp subsetting.
+                                    print("Please ensure genotype SNP file has no missing data before proceeding. BPRS is unable to handle snp sublists and NAs in matrix data.")
+                                    sys.exit()
+                                #new_genos = imputer.handleNAs(new_genos, index_manager.getIndexedBetas(p), p)
+                                new_genos = imputer.handleNAs(new_genos, beta, p)
+                        except IndexError:
+                            updateLog("Patient ", patient_id, "appears to have missing entries and will not be scored at",p,"threshold", True)
+                            #Find the NA
+                            scores[i][p][sample_counter] = float('nan')
+                            continue #don't calculate the score, simply proceed to the next iteration of p. 
+                        new_score = scoreCalculation(new_genos, beta) + prev_score
+                        try:
+                            scores[i][p][sample_counter] = new_score
+                        except IndexError:
+                            print("Subset number", i)
+                            print("pvalue", p)
+                            print("Sample count", sample_counter)
+                            print(len(scores[i][p][sample_counter]))
                         if DEBUG: updateLog(str(patient_ids[-1]), str(new_score))
-                        prev_score = new_score #unchanged.
-                        continue
-                    #sel = (itemgetter(*snp_index)(var_map)) #This is only dependent on p. #index manager
-                    #sel = extraction_list[p] #Don't need to repeat this.
-                    sel = index_manager.getGenoIndices(p)
-                    
-                    try:
-                        #new_genos = np.array(itemgetter(*sel)(rel_data), dtype = np.float64) 
-                        new_genos = np.genfromtxt(itemgetter(*sel)(rel_data), dtype = np.float64) #Maybe do a time comparison of this one and the previous...
-                        #new_genos = imputer.handleNAs(new_genos, snp_indices[p][B], p) #we handle the NAs as 0s, add up the scores, then modify them later.
-                        new_genos = imputer.handleNAs(new_genos, index_manager.getIndexedBetas(p), p)
-                    except IndexError:
-                        updateLog("Patient ", patient_id, "appears to have missing entries and will not be scored at",p,"threshold", True)
-                        #Find the NA
-                        scores[p].append(float('nan'))
-                        prev_score = new_score
-                        continue #don't calculate the score, simply proceed to the next iteration of p. 
-                    #new_score = scoreCalculation(new_genos, snp_indices[p][B]) + prev_score
-                    new_score = scoreCalculation(new_genos, index_manager.getIndexedBetas(p)) + prev_score
-                    scores[p].append(new_score)
-                    if DEBUG: updateLog(str(patient_ids[-1]), str(new_score))
-                    prev_score = new_score     
+                        i += 1
             dat = istream.readline() #previously a try-catch here if this errored, shouldn't need this anymore.
-            sample_counter += 1
+            line_counter += 1
             if sample_counter % report_index == 0:
                 print("Currently at individual/sample", sample_counter)
     print("Finished parsing sample genotype data!")
-    print("Mean imputing missing genotype data, if any...")
-    scores = imputer.updateScores(scores)
+    if not no_nas:
+        print("Mean imputing missing genotype data, if any...")
+        scores = imputer.updateScores(scores)
     updateLog("Number of genes with missing entries detected in genotype data: " +str(imputer.getNACount()), True)
     if sample_counter <= 1:
         updateLog("There appears to be some error with the genotype plink matrix- no entries were found. Please ensure the genotype data is correct or the plink call was not interrupted.  Consider deleting *.raw and re-running.", True)
         sys.exit()     
     return scores, patient_ids #basically a pval:[list of snps]  
 
-def calculatePRS(pvals, snp_matrix, index_manager, snp_list, sample_count):
+def calculatePRS(pvals, snp_matrix, index_manager, snp_list, sample_count, no_nas):
     """
     Actually calculates the PRS Scores, and times the process
     Returns a list of scores and the corresponding patient_ids, as well as any relevant debug informtion if specified
@@ -623,8 +704,12 @@ def calculatePRS(pvals, snp_matrix, index_manager, snp_list, sample_count):
     """
     #Seraj shoutout
     start = time.time()
-    scores = { p : [] for p in pvals}
-    scores, patient_ids = linearGenoParse(snp_matrix, index_manager,pvals, scores, snp_list, sample_count)
+    #scores = [{ p : ([0]*sample_count) for p in pvals}]*index_manager.numVariantSubsets()
+    #Doesn't quite work, point to same things.
+    scores = list()
+    for i in range(0, index_manager.numVariantSubsets()):
+        scores.append({ p : ([0]*sample_count) for p in pvals}) #Error here, haven't specifid the number of samples yet.
+    scores, patient_ids = linearGenoParse(snp_matrix, index_manager,pvals, scores, snp_list, sample_count, no_nas)
     end = time.time()
     print("Calculation and read in time:", str(end-start))
     return scores, patient_ids
@@ -709,7 +794,8 @@ def filterSumStatSNPs(ss, ss_type, keep_ambig_filter):
     ambig_list = {"AT", "TA", "GC", "CG"}
     sizes = {"start": 0,"non_bi": 0, "ambig":0, "na":0, "x":0}
     comment = {"ambig": "Ambiguous SNPs along with INDELS removed:", "na": "Variants with missing effect sizes removed:", "x": "Genes on the X chromosome removed:", "non_bi": "Non-biallelic SNPs removed:"}
-    ambig_filter = 0.4
+    #Set this to 0.3 from 0.4 on MArch 16
+    ambig_filter = 0.3
     if keep_ambig_filter:
         ambig_filter = 100
     ss_t = None
@@ -749,15 +835,13 @@ def filterSumStatSNPs(ss, ss_type, keep_ambig_filter):
         ss_t["location"] = id_data[0] + ":" + id_data[1]
         ss_t[REF] = id_data[2]
         ss_t[ALT] = id_data[3]
-        #ss_t["f"] = id_data[2]
-        #ss_t["s"] = id_data[3] 
-        #Removing non_bi-allelic SNPs
         ss_t.drop_duplicates(subset = "location", keep = False, inplace = True)
         sizes["non_bi"] = ss_t.shape[0]
         #Removing ambiguous SNPs
         ss_t = ss_t[ss_t.comb.isin(filter_list)]
-        ss_t = ss_t[(ss_t.comb.isin(ambig_list) & (ss_t.minor_AF > ambig_filter)) | (ss_t.comb.isin(noambig_list))]
-        #remove ones that are in the ambiguous list unless they have a MAF > 0.4, the default
+        #March 16, switch from > to <
+        ss_t = ss_t[(ss_t.comb.isin(ambig_list) & (ss_t.minor_AF < ambig_filter)) | (ss_t.comb.isin(noambig_list))]
+        #remove ones that are in the ambiguous list unless they have a MAF < 0.3, our default
         sizes["ambig"] = ss_t.shape[0]
         #Also remove SNPs with NA
         ss_t = ss_t[ss_t.beta.notnull()] #here its NaN
@@ -838,10 +922,10 @@ def plinkToMatrix(snp_keep, args, local_pvar, vplink, plink_path):
         syscall = " --bfile "
         annot = " --bim "
     call = plink_path + "plink2 " + syscall  + args + annot + local_pvar + " --geno 0.05 --not-chr X --extract " + snp_keep + " --out mat_form_tmp --export A" + memoryAllocation()
-    check_call(call, shell = True) 
+    check_call(call, shell = True)
     #--geno removes snps with more than % missing from the data.
     print("User-readable genotype matrix generated")
-    if not os.path.isfile("mat_form_tmp.raw"): 
+    if not os.path.isfile("mat_form_tmp.raw"):
         print("PLINK file was not correctly created. Program will terminate.")
         sys.exit()
     return "mat_form_tmp"
@@ -893,11 +977,33 @@ def getPatientIDs(snp_matrix):
     return [int(i.split("_")[0]) for i in tnames]
 
 
-def writeScores(scores, ids, destination, debug = False):
-    scores["IID"] = ids
-    tab_out = pd.DataFrame.from_dict(scores)
+def writeScores(scores, ids, subset_files,dest_path):
+#outfile_name = args.output + os.path.splitext(matrices_for_parsing[i])[0] + ".scores.tsv"
+    #Print the full one:
+    full = scores[0]
+    full["IID"] = ids
+    tab_out = pd.DataFrame.from_dict(full)
     tab_out = tab_out.set_index("IID")
-    tab_out.to_csv(destination, sep = '\t') 
+    tab_out = tab_out.round(5)
+    tab_out.to_csv(dest_path + '.full_prs.scores.tsv', sep = '\t') 
+
+    subset_list = subset_files.split(',')
+    print(subset_list)
+    if len(subset_list) + 1 != len(scores):
+        print("There was an error in scoring on subsets, scores were not recorded")
+        sys.exit()
+    c = 1
+    for subset_name in subset_list:
+        subset = scores[c] #we already did the base one, with a different name.
+        subset["IID"] = ids
+        tab_out = pd.DataFrame.from_dict(subset)
+        tab_out = tab_out.set_index("IID")
+        tab_out = tab_out.round(5)
+        a = os.path.basename(subset_name)
+        a = os.path.splitext(a)[0]
+        destination = dest_path + "." + a + ".subset_prs." + "scores.tsv"
+        tab_out.to_csv(destination, sep = '\t') 
+        c += 1
     return
 
 def writeScoresDebug(debug_tab, destination):
@@ -922,7 +1028,7 @@ if __name__ == '__main__':
 
     parser = argparse.ArgumentParser(description = "Basic tools for calculating rudimentary Polygenic Risk Scores (PRSs). This uses PLINK bed/bim/fam files and GWAS summary stats as standard inputs. Current version requires both plink2 and plink1")
     parser.add_argument("-snps", "--plink_snps", help = "Plink file handle for actual SNP data (omit the .extension portion)")
-    parser.add_argument("--preprocessing_done", action = "store_true", help = "Specify this if you have already run the first steps and generated the plink2 matrix with matching IDs. Mostly for development purposes.")
+    parser.add_argument("--preprocessing_done", action = "store_true", help = "Specify this if you have already run the first steps and generated the plink2 matrix with matching IDs. Mostly for development purposes.", required = "--split_scores" in sys.argv)
     parser.add_argument("-ss", "--sum_stats", help = "Path to summary stats file. Be sure to specify format if its not DEFAULT. Assumes tab delimited", required = True)
     parser.add_argument("--ss_format", help = "Format of the summary statistics", default = "SAIGE", choices = ["DEFAULT", "SAIGE", "NEAL", "HELIX"])
     parser.add_argument("--pvals", default = "ALL", help= "Specify which p-values to threshold at. To do multiple at once, list them separated by commas")
@@ -938,15 +1044,21 @@ if __name__ == '__main__':
     parser.add_argument("-pv", "--plink_version", default = 2, help = "Specify which version of plink files you are using for the reference data.", type = int, choices = [1,2])
     parser.add_argument("--align_ref", action = "store_true", help = "Specify this if you would like us to align the reference alleles between the target and training data. If this is already done, we recommend omitting this flag since it will create an additional copy of the genotype data.")
     parser.add_argument("--preprocess_only", action = "store_true", help = "Specify this option if you would like to terminate once preprocessing of SNPs (including aligning reference, removing ambiguous SNPs, preparing summary stat sublist) has completed.")
-    parser.add_argument("--OVERRIDE", help = "Use for deubgging- pass the matrix in")
-    parser.add_argument("--no_ambiguous_snps", help = "Specify this if you wish to remove all ambiguous SNPs whatsover, regardless of MAF. Default is to keep those with MAF > 0.4", action = "store_true", default = False)
+    parser.add_argument("--plink_snp_matrix", help = "Pass in a previously calculated SNP matrixs")
+    parser.add_argument("--no_ambiguous_snps", help = "Specify this if you wish to remove all ambiguous SNPs whatsover, regardless of MAF. Default is to keep those with MAF < 0.3", action = "store_true", default = False)
     parser.add_argument("--memory", help = "Specify memory allocation in MB for tasks called in plink. Default omits this argument", default = "")
     parser.add_argument("--plink2_path", help = "Specify the path to plink2 if its not in your PATH variable", default = "") 
+    parser.add_argument("--split_scores", help = "Specify (a) list(s) of variants to split scores by after filtering has been done already. Importantly happens after clumping: for other list inputs, do and then clump. Typically used when matrix has already been calculated", default = None)
+    parser.add_argument("--serialize", help = "If you want to write out scores debugging purposes", action = "store_true")
+    parser.add_argument("--no_na", action = "store_true", help = "Specify this if you know your data contains no NAs.", default = False, required = "--split_scores" in sys.argv)
+    parser.add_argument("--debug_pickle", help = "Specify a pickled score data if its available. For debugging.")
+    #TODO implement the path for subsetting by an input list with the following argument
+    parser.add_argument("--select_vars", help = 'Specify a list of variants that you want in the analysis')
     args = parser.parse_args()
     DEBUG = args.debug
     start = time.time()    
     #Extract the pvalues to asses at
-    updateLog(START_SEQ, str(date.today()))
+    updateLog(START_SEQ, str(datetime.datetime.now()))
     args_print = str(args).split(",")[1:]
     updateLog("Arguments", '\n'.join(args_print))
     if args.pvals != "ALL":
@@ -987,19 +1099,28 @@ if __name__ == '__main__':
         updateLog("Plink file data has been updated into new_plink.*. Use this in downstream runs.", True)
         sys.exit()
 
-    updateLog("Total number of SNPs for use in PRS calculations:", str(getEntryCount(geno_ids,False)))  
     stats_complete = readInSummaryStats(ss_parse)
     #snp_indices = indexSSByPval(pvals,stats_complete) #SNPIndexManager need the object
-    snp_index_manager = SNPIndexManager(pvals,stats_complete) #constructor allows for adding sum stats.
-    if args.OVERRIDE:
-        snp_matrix = args.OVERRIDE
+    snp_index_manager = SNPIndexManager(pvals,ss = stats_complete) #constructor allows for adding sum stats.
+    snp_index_manager.addSubsets(args.split_scores.split(','))
+    if args.plink_snp_matrix:
+        snp_matrix = args.plink_snp_matrix
     else:
-        snp_matrix = plinkToMatrix(geno_ids, args.plink_snps, local_pvar, args.plink_version, args.plink2_path) 
+        snp_matrix = plinkToMatrix(geno_ids, args.plink_snps, local_pvar, args.plink_version, args.plink2_path)
     print("Parsing the genotype file...")
-    scores, patient_ids = calculatePRS(pvals, snp_matrix, snp_index_manager,stats_complete[REFID], num_pat)
-    
-    writeScores(scores, patient_ids, args.output + ".tsv")
-    print("Scores written out to ", args.output + ".tsv")
+    if not args.debug_pickle:
+        scores, patient_ids = calculatePRS(pvals, snp_matrix, snp_index_manager,stats_complete[REFID], num_pat, args.no_na)
+        updateLog("Total number of SNPs for use in PRS calculations:", str(getEntryCount(geno_ids,False))) 
+        if args.serialize:
+            import pickle
+            pickle.dump(scores, open("scores.dat", "wb"))
+    else:
+        import pickle
+        scores = pickle.load(open(args.debug_pickle, 'rb'))
+        patient_ids = ["empty"] * 2984
+
+    writeScores(scores, patient_ids, args.split_scores, args.output)
+    print("Scores written out to ", args.output + ".*.scores.tsv")
     stop = time.time()
     updateLog("Total runtime: "+ str(stop - start), True)
     #TODO: Add cleanup functionality, remove the massive files you've made.

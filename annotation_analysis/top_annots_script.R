@@ -21,11 +21,12 @@ args <- parser$get_args()
 
 ss_in = args$sum_stats
 ldsc_annots_in = args$annots
+print(ldsc_annots_in)
 topn <- args$topn
 
 ldsc_annots <- fread(ldsc_annots_in) %>% drop_na()
 print(paste("Reading in", dim(ldsc_annots)[0], "SNPs from annotations data."))
-summary_stats <- fread(ss_in) %>% drop_na()
+summary_stats <- fread(args$sum_stats) %>% drop_na()
 print(paste("Reading in", dim(summary_stats)[0], "SNPs from summary stats."))
 
 
@@ -64,8 +65,12 @@ for(p in pvals)
   rsquared <-unlist(lapply(all_regressions$Fits, function(x) x$r.squared))
   annot_beta <-unlist(lapply(all_regressions$Fits, function(x) x$coefficients[2]))
   annot_pval <- unlist(lapply(all_regressions$Fits, function(x) x$coefficients[8]))
-  annot_error <- unlist(lapply(all_regressions$Fits, function(x) x$coefficients[4]))
-  annot_reg_results <- data.frame(annot = colnames(annots_numeric), R2 = rsquared, beta = annot_beta, pval = annot_pval, std_error = annot_error, abs_beta = abs(annot_beta), bonf_p = p.adjust(annot_pval, method = "bonferroni")) %>% arrange(-abs_beta)
+  
+    annot_t <- unlist(lapply(all_regressions$Fits, function(x) x$coefficients[6]))
+    annot_error <- unlist(lapply(all_regressions$Fits, function(x) x$coefficients[4]))
+  annot_reg_results <- data.frame(annot = colnames(annots_numeric), R2 = rsquared, beta = annot_beta, t_stat = annot_t, pval = annot_pval, std_error = annot_error, abs_beta = abs(annot_beta),abs_t = abs(annot_t), bonf_p = p.adjust(annot_pval, method = "bonferroni")) %>% arrange(-abs_t)
+
+#  annot_reg_results <- data.frame(annot = colnames(annots_numeric), R2 = rsquared, beta = annot_beta, t_stat = annot_t, pval = annot_pval, std_error = annot_error, abs_beta = abs(annot_beta), bonf_p = p.adjust(annot_pval, method = "bonferroni")) %>% arrange(-abs_beta)
   
   #plot
   top_annots <- annot_reg_results[1:topn,]
@@ -82,10 +87,15 @@ for(p in pvals)
   toppers <- rtemp %>% mutate(topTier = ifelse(ordering <= topn,1,0))
   #in_top <- in_top %>% mutate(p = toppers$topTier)
   in_top[,as.character(p)] <- toppers$topTier
-  write.table(annot_reg_results, file = paste0(args$output,'/',p, "effect_sizes.tsv"), quote=FALSE, sep='\t', row.names = F)
+  
+write.table(annot_reg_results, file = paste0(args$output,p, "_effect_sizes.tsv"), quote=FALSE, sep='\t', row.names = F)
+
 }
+
+
+
 ranks <- ranks %>% mutate(total = rowSums(select_if(ranks, is.numeric)))
 in_top <- in_top %>% mutate(total = rowSums(select_if(in_top, is.numeric)))
-
-write.table(in_top, file=paste0(args$output,'/top_appearances.tsv'), quote=FALSE, sep='\t', row.names = F)
+if(args$iterate)
+{write.table(in_top, file=paste0(args$output,'top_appearances.tsv'), quote=FALSE, sep='\t', row.names = F)}
 write.table(ranks, file=paste0(args$output, 'overall_ranks.tsv'), quote=FALSE, sep='\t', row.names = F)
