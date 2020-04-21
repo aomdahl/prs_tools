@@ -33,8 +33,9 @@ plotCorr <- function(dat, output, style_name, category_var, no_pvals)
     library("ggsci")
     #dat[,1] <- as.numeric(as.character(dat[,1]))
     #dat[,1] <- as.character(dat[,1])
-    dat$pval_names <- as.character(dat$pval_names)
-    dat <- dat[order(dat$pval_names),]
+    dat$pval_names <- as.numeric(as.character(dat$pval_names))
+    #dat <- dat[order(dat$pval_names),]
+    dat <- arrange(dat, pval_names)
     dat$pval_names <- as.factor(dat$pval_names)
     dat$logp <- -log2(dat$pval_beta)
     if(category_var == ""){
