@@ -5,13 +5,11 @@ suppressMessages(library(ggplot2))
 suppressMessages(library(tidyr))
 suppressMessages(library(dplyr))
 suppressMessages(library(Xmisc))
-suppressMessages(library(rms))
-suppressMessages(library(ggplot2))
 
 source("./prs_tools/liability_pseudoR2.R")
 
 parser <- ArgumentParser$new()
-parser$add_description("R script for generating figures associated with PRS results and their phenotypes. Currently (8/26) creates a histogram and a scatter plot, with points labelled by case/control disease condition.")
+parser$add_description("Script to asses PRS results and their phenotypes. Currently (8/26) creates a histogram and a scatter plot, with points labelled by case/control disease condition.")
 parser$add_argument("--prs_results", type = 'character', help = "Prefix to the files with PRS scores, listed in a .tsv by ID and score")
 parser$add_argument("--pheno", type = "character", help = "Path to phenotype file, as given by Marios' analysis.", default = "/work-zfs/abattle4/ashton/prs_dev/CHS_race1_toy/pheno_mendrand.txt")
 parser$add_argument("--output", type = "character", help = "Output file path.")
@@ -19,6 +17,7 @@ parser$add_argument('--help',type='logical',action='store_true',help='Print the 
 parser$add_argument('--risk_trait', help = "Specify the name of the condition we are scoring on, a string", type = "character", default = "LDL")
 parser$add_argument("--case_control", type = "logical", action = "store_true", help = "Specify this if it isn't a continuous trait. Otherwise program will guess based on data", default = FALSE)
 parser$add_argument("--delim", type = "character", help = "Specify which kind of delimiter in file, could be a ' ', '\\t' or otherwise", default = "\t")
+parser$add_argument("--no_plot", help = "Specify this to say no plot to be included", action = "store_true", type = "logical", default = FALSE)
 parser$add_argument("--r2", help = "Specify which type of r2 or pseudo-r2 to use. Default is either linear R2 or liability scale.", default = "linear", type = "character")
 parser$add_argument("--covars", type = "character", help = "Specify column names with covariates to correct for, such as 'gender'. Default is none. Write as covar1+covar2+..", default = "")
 parser$add_argument("--category_split", type = "character", help = "Specify different subgroups to score on, such as ancestry. This will score the groups separately.", default = "")
@@ -77,7 +76,8 @@ if(cat_split == '')
 }else{
     select_cols <- c("IID", trait,cat_split, unlist(as.list(strsplit(args$covars, '+', fixed = T)[[1]])))
 }
-phenos <- read_delim(args$pheno, delim = args$delim) %>% select(all_of(select_cols)) %>% na.omit()
+phenos <- read_delim(args$pheno, delim = args$delim) %>% select(unlist(select_cols)) %>% na.omit()
+
 print(paste0("Phenotype data for ", nrow(phenos), " individuals"))
 #Set up if splitting by categories
 
@@ -91,6 +91,8 @@ for (f in fl)
 {
     filename <- basename(f)
     prs <- read_delim(f, delim = args$delim)
+    prs$IID <- as.character(prs$IID)
+    phenos$IID <- as.character(phenos$IID)
     print(paste0("PRS scores for ", nrow(prs), " individuals."))
     MI_pred <- inner_join(prs, phenos, by = "IID")
     print(paste0(nrow(MI_pred), " individuals had both PRS scores and phenotype data"))
@@ -175,5 +177,9 @@ for (f in fl)
     plotCorr(dat, args$output, r2_name,cat_split, args$hide_pvals)
     print(paste("Completed review for", f)) 
 }
-
-
+#Do that for each individually. Now get the
+dat <- data.frame(pval_names, r2)
+write_tsv(dat, paste0(args$output,"_r2counts.tsv"))
+if(!args$no_plot){
+plotCorr(dat, args$output, r2_name)
+}
