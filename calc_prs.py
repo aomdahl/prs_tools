@@ -126,10 +126,12 @@ class MissingGenoHandler:
     def updateScores(self, scores):
         self.__calculateMeans()
         self.__buildImputedAdjustor()
+        if(len(scores) > 1):
+            updateLog("Sublisting functionality for missing data has not been implemented yet, will not be accounted for here.")
         for p in self.pvals:
             #TODO add rounding here. Wait until finished testing for other purposes, but do it.
             #scores[p] = np.around(self.score_modifier[p] + scores[p],decimals = 5)
-            scores[p] = self.score_modifier[p] + scores[p] #just for testing.
+            scores[0][p] = self.score_modifier[p] + scores[0][p] #just for testing.
         return scores
                 
 ######################################
@@ -147,15 +149,15 @@ class SNPIndexManager:
         self.subsets = list() #Store subsets we wish to score separately on, if they exist.
         self.subsets_var_map = list()
         self.var_map_index = { p : dict() for p in self.pvals} #this has the 
-        
+        self.extractionListsBuilt = False #Help switch to track if we have built extraction lists 
         if ss is not None:
             self.indexSSByPval(ss) #this updates snp_indices
             for p in self.pvals:
                 self.ss_counts[p] = len(self.snp_indices[p][INDEX])
     
     def addSubsets(self, subs):
-        if len(subs) == 0:
-            self.subsets_var_map.append({ p : [] for p in self.pvals})
+        if len(subs) == 0 or subs[0] == "":
+            ##self.subsets_var_map.append({ p : [] for p in self.pvals})
             print("No subsets of SNPs included")
             return
         self.subsets = subs
@@ -165,7 +167,7 @@ class SNPIndexManager:
         #print(self.subsets)
 
     def numVariantSubsets(self):
-        print("we've got subsets,", len(self.subsets) + 1)
+        print("we've got subsets,", len(self.subsets), "in addition to the full list of variants")
         return len(self.subsets) + 1 #The main subset must be counted, so always at least 1
     def __syncSubsets(self):
         """
@@ -174,8 +176,13 @@ class SNPIndexManager:
         if self.var_map is None: #Only if we have already done 
             raise Exception("Variant map has not been set. Program will terminate")
             sys.exit()
-        self.geno_subset_extraction_maps = [None] * len(self.subsets)
+        if len(self.subsets) == 0:
+            return
+        if self.subsets[0] != "":
+            self.geno_subset_extraction_maps = [None] * len(self.subsets)
         for i, subset_path in enumerate(self.subsets):
+            if subset_path == "":
+                continue
             with open(subset_path, 'r') as istream:
                 for line in istream:
                     snp = line.strip() 
@@ -340,7 +347,8 @@ class SNPIndexManager:
         """
         Update the subset lists to contain the relevant extracted values for scoring along with the Betas.
         """
-        print("Building the subset extraction lists....")
+        if len(self.subsets_var_map) > 0:
+            print("Building the subset extraction lists....")
         for i,subset in enumerate(self.subsets_var_map): #ordered subsets.
             self.geno_subset_extraction_maps[i] = { p : [[],[]] for p in self.pvals} #make each a tuple, with betas in one and 
             for p in self.pvals:
@@ -363,10 +371,13 @@ class SNPIndexManager:
         return
 
     def getAllGenoIndices(self, p):
-        if not self.geno_extraction_map or not self.geno_subset_extraction_maps: #its empty
+        #if not self.geno_extraction_map or not self.geno_subset_extraction_maps: #its empty
+        if not self.extractionListsBuilt:
             self.__buildExtractionList()
             self.__syncSubsets()
             self.__buildSubsetExtractionLists()
+            self.extractionListsBuilt = True
+            print("Variant extraction lists made")
         ret_list = [self.geno_extraction_map[p]]
         for subset in self.geno_subset_extraction_maps: #ordered subsets.
             ret_list.append(subset[p][INDEX])
@@ -394,7 +405,7 @@ def updateLog(*prints):
                 print(prints[i])
                 ostream.write(str(prints[i]) + ' ')
         else:
-            for a in prints[0:-1]:
+            for a in prints:
                 ostream.write(str(a) + " ")
         ostream.write("\n")
     
@@ -745,7 +756,8 @@ def alignReferenceByPlink(old_plink,plink_version, ss, ss_type, plink_path):
         sys.exit()
     ftype = " --pfile "
     ext = ".pvar"
-    remove_multi = "cut -f 3 " + old_plink + ext + " | uniq -d > remove_multi.t"
+    #remove_multi = "cut -f 3 " + old_plink + ext + " | uniq -d > remove_multi.t"
+    remove_multi = "awk  '/^[^#]/ { print $3 }' " + old_plink + ext + " | uniq -d > remove_multi.t"
     if plink_version == 1:
         ftype = " --bfile "
         ext = ".bim"
@@ -759,10 +771,11 @@ def alignReferenceByPlink(old_plink,plink_version, ss, ss_type, plink_path):
         #We need to do this before we can align, otherwise plink generates errors 
         #feb/11- added --geno to filter variants with missing call rates > 0.05%. This is also done later, but better done here.
         try:
-            plink_call_first = plink_path + "plink2" + ftype + old_plink + " --geno 0.05 --make-pgen --out filtered_target --exclude remove_multi.t --not-chr X" + memoryAllocation()
+            plink_call_first = plink_path + "plink2 " + ftype + old_plink + " --geno 0.05 --make-pgen --out filtered_target --exclude remove_multi.t --not-chr X" + memoryAllocation()
             check_call(plink_call_first, shell = True)
         except subprocess.CalledProcessError:
             updateLog("We have encountered an error calling plink2. Are all of your file paths corrected? Do you have plink2 installed. It can be found at https://www.cog-genomics.org/plink/2.0/", True)
+            updateLog(plink_call_first)
             sys.exit() 
         plink_call = plink_path + "plink2 --pfile filtered_target --ref-allele force aligner.t --make-pgen --out new_plink" + memoryAllocation()
         #plink_call = "plink2" + ftype + old_plink + " --ref-allele aligner.t --make-pgen --out new_plink"
@@ -994,6 +1007,8 @@ def writeScores(scores, ids, subset_files,dest_path):
         sys.exit()
     c = 1
     for subset_name in subset_list:
+        if subset_name == "":
+            continue
         subset = scores[c] #we already did the base one, with a different name.
         subset["IID"] = ids
         tab_out = pd.DataFrame.from_dict(subset)
@@ -1048,7 +1063,7 @@ if __name__ == '__main__':
     parser.add_argument("--no_ambiguous_snps", help = "Specify this if you wish to remove all ambiguous SNPs whatsover, regardless of MAF. Default is to keep those with MAF < 0.3", action = "store_true", default = False)
     parser.add_argument("--memory", help = "Specify memory allocation in MB for tasks called in plink. Default omits this argument", default = "")
     parser.add_argument("--plink2_path", help = "Specify the path to plink2 if its not in your PATH variable", default = "") 
-    parser.add_argument("--split_scores", help = "Specify (a) list(s) of variants to split scores by after filtering has been done already. Importantly happens after clumping: for other list inputs, do and then clump. Typically used when matrix has already been calculated", default = None)
+    parser.add_argument("--split_scores", help = "Specify (a) list(s) of variants to split scores by after filtering has been done already. Importantly happens after clumping: for other list inputs, do and then clump. Typically used when matrix has already been calculated", default = "")
     parser.add_argument("--serialize", help = "If you want to write out scores debugging purposes", action = "store_true")
     parser.add_argument("--no_na", action = "store_true", help = "Specify this if you know your data contains no NAs.", default = False, required = "--split_scores" in sys.argv)
     parser.add_argument("--debug_pickle", help = "Specify a pickled score data if its available. For debugging.")
