@@ -123,16 +123,18 @@ class MissingGenoHandler:
             prev = self.score_modifier[p]
 
             
-    def updateScores(self, scores):
+    def updateScores(self, scores_):
+        print(scores_)
         self.__calculateMeans()
         self.__buildImputedAdjustor()
-        if(len(scores) > 1):
+        if(len(scores_) > 1):
             updateLog("Sublisting functionality for missing data has not been implemented yet, will not be accounted for here.")
         for p in self.pvals:
             #TODO add rounding here. Wait until finished testing for other purposes, but do it.
             #scores[p] = np.around(self.score_modifier[p] + scores[p],decimals = 5)
-            scores[0][p] = self.score_modifier[p] + scores[0][p] #just for testing.
-        return scores
+            scores_[p] = self.score_modifier[p] + scores_[p] 
+        print(scores_)
+        return scores_
                 
 ######################################
 class SNPIndexManager:
@@ -167,7 +169,7 @@ class SNPIndexManager:
         #print(self.subsets)
 
     def numVariantSubsets(self):
-        print("we've got subsets,", len(self.subsets), "in addition to the full list of variants")
+        #print("we've got subsets,", len(self.subsets), "in addition to the full list of variants")
         return len(self.subsets) + 1 #The main subset must be counted, so always at least 1
     def __syncSubsets(self):
         """
@@ -590,12 +592,15 @@ def linearGenoParse(snp_matrix, index_manager,pvals, scores, ss_ids, nsamps, no_
     PDI = {"FID":0, "IID":1, "PAT":2, "MAT":3, "SEX":4, "PHENOTYPE" : 5, "SNPS":6}
     SNPS_ = PDI["SNPS"]
     pvals.sort() #smallest to largest
+    imputers = list()
+    for i in range(0, index_manager.numVariantSubsets()):
+        imputers.append(MissingGenoHandler(index_manager.getSSTotals(),nsamps,pvals)) #create the object to handle this....
+    
     ############Parse the matrix file
     print("opening", snp_matrix)
     with open(snp_matrix + ".raw", 'r') as istream:
         line_counter = 0
         dat = istream.readline().strip()
-        imputer = MissingGenoHandler(index_manager.getSSTotals(),nsamps,pvals) #create the object to handle this....
         pvals.sort()
         while dat:
             sample_counter = line_counter - 1 #Track which sample we are on, 1 - the line number
@@ -644,8 +649,8 @@ def linearGenoParse(snp_matrix, index_manager,pvals, scores, ss_ids, nsamps, no_
                         DEBUG_DAT[SNP][p] = np.concatenate((DEBUG_DAT[SNP][p], prev_append_snp))
                         prev_append_snp = DEBUG_DAT[SNP][p]
                         prev_append_beta = DEBUG_DAT[BETA][p]
-                    writeScoresDebug(DEBUG_DAT[SNP], snp_matrix + ".debug_vals_snps.tsv")
-                    writeScoresDebug(DEBUG_DAT[BETA], snp_matrix + ".debug_vals_betas.tsv")
+                    writeScoresDebug(DEBUG_DAT[SNP], os.path.basename(snp_matrix) + ".debug_vals_snps.tsv")
+                    writeScoresDebug(DEBUG_DAT[BETA], os.path.basename(snp_matrix) + ".debug_vals_betas.tsv")
                 print('SNP order established. Scoring will now begin.')        
             else:
                 rel_data = dat[SNPS_:]
@@ -675,7 +680,7 @@ def linearGenoParse(snp_matrix, index_manager,pvals, scores, ss_ids, nsamps, no_
                                     print("Please ensure genotype SNP file has no missing data before proceeding. BPRS is unable to handle snp sublists and NAs in matrix data.")
                                     sys.exit()
                                 #new_genos = imputer.handleNAs(new_genos, index_manager.getIndexedBetas(p), p)
-                                new_genos = imputer.handleNAs(new_genos, beta, p)
+                                new_genos = imputers[i].handleNAs(new_genos, beta, p)
                         except IndexError:
                             updateLog("Patient ", patient_id, "appears to have missing entries and will not be scored at",p,"threshold", True)
                             #Find the NA
@@ -698,8 +703,9 @@ def linearGenoParse(snp_matrix, index_manager,pvals, scores, ss_ids, nsamps, no_
     print("Finished parsing sample genotype data!")
     if not no_nas:
         print("Mean imputing missing genotype data, if any...")
-        scores = imputer.updateScores(scores)
-    updateLog("Number of genes with missing entries detected in genotype data: " +str(imputer.getNACount()), True)
+        for i, imp in enumerate(imputers):
+            scores[i] = imp.updateScores(scores[i])
+    updateLog("Number of genes with missing entries detected in genotype data: " +str(imputers[0].getNACount()), True)
     if sample_counter <= 1:
         updateLog("There appears to be some error with the genotype plink matrix- no entries were found. Please ensure the genotype data is correct or the plink call was not interrupted.  Consider deleting *.raw and re-running.", True)
         sys.exit()     
@@ -720,6 +726,7 @@ def calculatePRS(pvals, snp_matrix, index_manager, snp_list, sample_count, no_na
     scores = list()
     for i in range(0, index_manager.numVariantSubsets()):
         scores.append({ p : ([0]*sample_count) for p in pvals}) #Error here, haven't specifid the number of samples yet.
+    print(scores)
     scores, patient_ids = linearGenoParse(snp_matrix, index_manager,pvals, scores, snp_list, sample_count, no_nas)
     end = time.time()
     print("Calculation and read in time:", str(end-start))
@@ -993,7 +1000,9 @@ def getPatientIDs(snp_matrix):
 def writeScores(scores, ids, subset_files,dest_path):
 #outfile_name = args.output + os.path.splitext(matrices_for_parsing[i])[0] + ".scores.tsv"
     #Print the full one:
+    type(scores)
     full = scores[0]
+    type(full)
     full["IID"] = ids
     tab_out = pd.DataFrame.from_dict(full)
     tab_out = tab_out.set_index("IID")
@@ -1001,9 +1010,10 @@ def writeScores(scores, ids, subset_files,dest_path):
     tab_out.to_csv(dest_path + '.full_prs.scores.tsv', sep = '\t') 
 
     subset_list = subset_files.split(',')
-    print(subset_list)
-    if len(subset_list) + 1 != len(scores):
+    if len(subset_list) != len(scores): #Subset_lists will always have 1, because its an empty string
         print("There was an error in scoring on subsets, scores were not recorded")
+        print(len(subset_list))
+        print(len(scores))
         sys.exit()
     c = 1
     for subset_name in subset_list:
@@ -1068,12 +1078,12 @@ if __name__ == '__main__':
     parser.add_argument("--no_na", action = "store_true", help = "Specify this if you know your data contains no NAs.", default = False, required = "--split_scores" in sys.argv)
     parser.add_argument("--debug_pickle", help = "Specify a pickled score data if its available. For debugging.")
     #TODO implement the path for subsetting by an input list with the following argument
-    parser.add_argument("--select_vars", help = 'Specify a list of variants that you want in the analysis')
+    parser.add_argument("--select_vars", help = 'Specify a list of variants that you want in the analysis NOT YET IMPLENENTED')
     args = parser.parse_args()
     DEBUG = args.debug
     start = time.time()    
     #Extract the pvalues to asses at
-    updateLog(START_SEQ, str(datetime.datetime.now()))
+    updateLog(START_SEQ, str(datetime.datetime.now()), '\n', "------------------------------")
     args_print = str(args).split(",")[1:]
     updateLog("Arguments", '\n'.join(args_print))
     if args.pvals != "ALL":
