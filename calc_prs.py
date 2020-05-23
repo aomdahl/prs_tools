@@ -575,6 +575,41 @@ def scoreCalculation(geno, betas):
     except ValueError:
         print("It appears that the number of SNPs is not as expected. We suggest lowering the missing genotype filter threshold, and additional debugging.")   
 
+def recordSNPsWeights(curr_p,im, dat, SNPS_):
+    """
+    Helper function to just update the DEBUG data with weights and such
+    @param curr_p: pvalue on current iteration
+    @param im: index manager object
+    @param dat: the line of data we are considering
+    @param SNPS_: index of SNP data onward.
+    """
+    DEBUG_DAT[BETA] = dict()
+    DEBUG_DAT[SNP] = dict()
+    prev_append_snp = []
+    prev_append_beta = []
+    for p in pvals:
+        DEBUG_DAT[BETA][curr_p] = im.getIndexedBetas(curr_p)
+        if len(im.getAllGenoIndices(p)[0]) == 0:
+            DEBUG_DAT[SNP][curr_p] = []
+        else:
+            #sel = (itemgetter(*snp_index)(var_map))  #Index manager
+            #sel = index_manager.getGenoIndices(p)
+            sel = im.getAllGenoIndices(curr_p)[0] #I would prefer to keep it the old way, but for working sake.....
+            try:
+                DEBUG_DAT[SNP][curr_p] = ((itemgetter(*sel)(dat[SNPS_:])))
+            except TypeError as e:
+                print(sel)
+                print(e)
+                print("SNP ID", SNP)
+                print("Pvalue", curr_p)
+                print("Errors detected in matrix header. Will not print snps used.")
+                continue
+        DEBUG_DAT[BETA][curr_p] = np.concatenate((DEBUG_DAT[BETA][curr_p],prev_append_beta))
+        DEBUG_DAT[SNP][curr_p] = np.concatenate((DEBUG_DAT[SNP][curr_p], prev_append_snp))
+        prev_append_snp = DEBUG_DAT[SNP][curr_p]
+        prev_append_beta = DEBUG_DAT[BETA][curr_p]
+
+
 def linearGenoParse(snp_matrix, index_manager,pvals, scores, ss_ids, nsamps, no_nas, writeSNPListsOnly = True):
     """
     Parse the patient file
@@ -598,108 +633,84 @@ def linearGenoParse(snp_matrix, index_manager,pvals, scores, ss_ids, nsamps, no_
     
     ############Parse the matrix file
     print("opening", snp_matrix)
-    with open(snp_matrix + ".raw", 'r') as istream:
-        line_counter = 0
-        dat = istream.readline().strip()
-        pvals.sort()
-        while dat:
-            sample_counter = line_counter - 1 #Track which sample we are on, 1 - the line number
-            dat = dat.split('\t')
-            if line_counter == 0:
-                index_manager.mapSStoGeno(dat[SNPS_:], ss_ids) #builds a map of variants
-                if DEBUG or writeSNPListsOnly: 
-                    DEBUG_DAT[REFID] = dat[SNPS_:]
-                print("Proceeding with line-by-line calculation now...")
-                ########### Update the log
-                prev = 0
-                for p in pvals:
-                    #num_snps = len(snp_indices[p][INDEX]) #Index manager #getSNPCount
-                    num_snps = index_manager.getSNPCount(p)
-                    updateLog("Number of final SNPs used at ", str(p), "pvalue level:", str(num_snps + prev))
-                    prev = prev + num_snps
-                if DEBUG or writeSNPListsOnly:
-                    DEBUG_DAT[BETA] = dict()
-                    DEBUG_DAT[SNP] = dict()
-                    prev_append_snp = []
-                    prev_append_beta = []
+    import mmap
+    import contextlib
+    #with open(snp_matrix + ".raw", 'r') as istream:
+    na_set = set(["NA", "-", "na", "NaN"])
+    with open(snp_matrix + ".raw", 'r') as f:
+        with contextlib.closing(mmap.mmap(f.fileno(), 0, access=mmap.ACCESS_READ)) as istream:
+            line_counter = 0
+            dat = istream.readline().strip()
+            pvals.sort()
+            while dat:
+                sample_counter = line_counter - 1 #Track which sample we are on, 1 - the line number
+                dat = (dat.decode('ascii')).split('\t')
+                if line_counter == 0:
+                    index_manager.mapSStoGeno(dat[SNPS_:], ss_ids) #builds a map of variants
+                    DEBUG_DAT[REFID] = dat[SNPS_:] #track the variants for debug output
+                    print("Proceeding with line-by-line calculation now...")
+                    ########### Update the log, write out SNPs and weights
+                    prev = 0
                     for p in pvals:
-                        #DEBUG_DAT[BETA][p] = snp_indices[p][B]
-                        DEBUG_DAT[BETA][p] = index_manager.getIndexedBetas(p)
-                        #snp_index = snp_indices[p][INDEX]
-                        #sel = var_map[snp_index] #Putting this in, not sure why we don't have it.
-                        #If the snp_index has length 0, then its empty.
-                        #if len(index_manager.getGenoIndices(p)) == 0:
-                        if len(index_manager.getAllGenoIndices(p)[0]) == 0:
-                            DEBUG_DAT[SNP][p] = []
-                        else:
-                            #sel = (itemgetter(*snp_index)(var_map))  #Index manager
-                            #sel = index_manager.getGenoIndices(p)
-                            sel = index_manager.getAllGenoIndices(p)[0] #I would prefer to keep it the old way, but for working sake.....
-                            try:
-                                DEBUG_DAT[SNP][p] = ((itemgetter(*sel)(dat[SNPS_:])))
-                            except TypeError as e:
-                                print(sel)
-                                print(e)
-                                print("SNP ID", SNP)
-                                print("Pvalue", p)
-                                print("Errors detected in matrix header. Will not print snps used.")
-                                continue
-
-                        DEBUG_DAT[BETA][p] = np.concatenate((DEBUG_DAT[BETA][p],prev_append_beta))
-                        DEBUG_DAT[SNP][p] = np.concatenate((DEBUG_DAT[SNP][p], prev_append_snp))
-                        prev_append_snp = DEBUG_DAT[SNP][p]
-                        prev_append_beta = DEBUG_DAT[BETA][p]
+                        num_snps = index_manager.getSNPCount(p)
+                        updateLog("Number of final SNPs used at ", str(p), "pvalue level:", str(num_snps + prev))
+                        prev = prev + num_snps
+                        recordSNPsWeights(p,index_manager, dat, SNPS_)
                     writeScoresDebug(DEBUG_DAT[SNP], os.path.basename(snp_matrix) + ".debug_vals_snps.tsv")
                     writeScoresDebug(DEBUG_DAT[BETA], os.path.basename(snp_matrix) + ".debug_vals_betas.tsv")
-                print('SNP order established. Scoring will now begin.')        
-            else:
-                rel_data = dat[SNPS_:]
-                patient_id = str(dat[PDI["IID"]])
-                patient_ids.append(patient_id)
-                prev_score = 0
-                new_score = 0
-                
-                for j, p in enumerate(pvals):
-                    #snp_index = snp_indices[p][INDEX] #Index manager.
-                    i = 0
-                    for sel, beta in zip(index_manager.getAllGenoIndices(p), index_manager.getAllIndexedBetas(p)):
-                        prev_score = 0
-                        if j > 0:
-                            prev_p = pvals[j-1]
-                            prev_score = scores[i][prev_p][sample_counter]
-                        if len(sel) == 0: #There are 0 snps at this significance level (!) #use the manager
-                            new_score = prev_score + 0
-                            scores[i][p][sample_counter] = new_score
+                    print('SNP order established. Scoring will now begin.')        
+                else:
+                    rel_data = dat[SNPS_:]
+                    patient_id = str(dat[PDI["IID"]])
+                    patient_ids.append(patient_id)
+                    prev_score = 0
+                    new_score = 0
+                    
+                    for j, p in enumerate(pvals):
+                        #snp_index = snp_indices[p][INDEX] #Index manager.
+                        i = 0
+                        for sel, beta in zip(index_manager.getAllGenoIndices(p), index_manager.getAllIndexedBetas(p)):
+                            prev_score = 0
+                            if j > 0:
+                                prev_p = pvals[j-1]
+                                prev_score = scores[i][prev_p][sample_counter]
+                            if len(sel) == 0: #There are 0 snps at this significance level (!) #use the manager
+                                new_score = prev_score + 0
+                                scores[i][p][sample_counter] = new_score
+                                if DEBUG: updateLog(str(patient_ids[-1]), str(new_score))
+                                continue
+                            try:
+                                if no_nas:
+                                    new_genos = np.array(rel_data, dtype = np.float64)
+                                else:
+                                    if any([x in dat for x in na_set]):
+                                        new_genos = np.genfromtxt(rel_data, dtype = np.float64)
+                                    else:
+                                        new_genos = np.array(rel_data, dtype = np.float64)
+
+                                    if len(index_manager.getAllGenoIndices(p)) > 1: #If we are snp subsetting.
+                                        print("Please ensure genotype SNP file has no missing data before proceeding. BPRS is unable to handle snp sublists and NAs in matrix data.")
+                                        sys.exit()
+                                    new_genos = imputers[i].handleNAs(new_genos, beta, p)
+                            except IndexError:
+                                updateLog("Patient ", patient_id, "appears to have missing entries and will not be scored at",p,"threshold", True)
+                                #Find the NA
+                                scores[i][p][sample_counter] = float('nan')
+                                continue #don't calculate the score, simply proceed to the next iteration of p. 
+                            new_score = scoreCalculation(new_genos, beta) + prev_score
+                            try:
+                                scores[i][p][sample_counter] = new_score
+                            except IndexError:
+                                print("Subset number", i)
+                                print("pvalue", p)
+                                print("Sample count", sample_counter)
+                                print(len(scores[i][p][sample_counter]))
                             if DEBUG: updateLog(str(patient_ids[-1]), str(new_score))
-                            continue
-                        #sel = index_manager.getGenoIndices(p) #This returns a list of Genotype indices for full first, and then a list for each subset
-                        try:
-                            new_genos = np.genfromtxt(itemgetter(*sel)(rel_data), dtype = np.float64) #Maybe do a time comparison of this one and the previous...
-                            if not no_nas:
-                                if len(index_manager.getAllGenoIndices(p)) > 1: #If we are snp subsetting.
-                                    print("Please ensure genotype SNP file has no missing data before proceeding. BPRS is unable to handle snp sublists and NAs in matrix data.")
-                                    sys.exit()
-                                #new_genos = imputer.handleNAs(new_genos, index_manager.getIndexedBetas(p), p)
-                                new_genos = imputers[i].handleNAs(new_genos, beta, p)
-                        except IndexError:
-                            updateLog("Patient ", patient_id, "appears to have missing entries and will not be scored at",p,"threshold", True)
-                            #Find the NA
-                            scores[i][p][sample_counter] = float('nan')
-                            continue #don't calculate the score, simply proceed to the next iteration of p. 
-                        new_score = scoreCalculation(new_genos, beta) + prev_score
-                        try:
-                            scores[i][p][sample_counter] = new_score
-                        except IndexError:
-                            print("Subset number", i)
-                            print("pvalue", p)
-                            print("Sample count", sample_counter)
-                            print(len(scores[i][p][sample_counter]))
-                        if DEBUG: updateLog(str(patient_ids[-1]), str(new_score))
-                        i += 1
-            dat = istream.readline() #previously a try-catch here if this errored, shouldn't need this anymore.
-            line_counter += 1
-            if sample_counter % report_index == 0:
-                print("Currently at individual/sample", sample_counter)
+                            i += 1
+                dat = istream.readline() #previously a try-catch here if this errored, shouldn't need this anymore.
+                line_counter += 1
+                if sample_counter % report_index == 0:
+                    print("Currently at individual/sample", sample_counter)
     print("Finished parsing sample genotype data!")
     if not no_nas:
         print("Mean imputing missing genotype data, if any...")
@@ -726,7 +737,6 @@ def calculatePRS(pvals, snp_matrix, index_manager, snp_list, sample_count, no_na
     scores = list()
     for i in range(0, index_manager.numVariantSubsets()):
         scores.append({ p : ([0]*sample_count) for p in pvals}) #Error here, haven't specifid the number of samples yet.
-    print(scores)
     scores, patient_ids = linearGenoParse(snp_matrix, index_manager,pvals, scores, snp_list, sample_count, no_nas)
     end = time.time()
     print("Calculation and read in time:", str(end-start))
@@ -822,10 +832,6 @@ def filterSumStatSNPs(ss, ss_type, keep_ambig_filter):
     out_name = "filtered_" + ss_type + ".ss"
     #Some room to beautify the code here...
     if ss_type == "HELIX":
-        #Specify dtypes to speed up read in. Or better yet, select just the columsn we want from the get go
-        #SNP    CHR BP  A1  A2  P   BETA
-        #dtype= { "SNP":'string_',"CHR": 'category', "BETA":'float64',"P":'float64', "A1":'category', "A2":'category'}
-        #usecols = ["SNP", "CHR", "A1", "A2", "BETA", "P"]
         ss_t = pd.read_csv(ss, sep = '\t', dtype = {"CHR":"string_"})
         sizes["start"] = ss_t.shape[0]
         #Remove non-biallelic snps
@@ -871,10 +877,6 @@ def filterSumStatSNPs(ss, ss_type, keep_ambig_filter):
         sizes["x"] = ss_t.shape[0]
         #Set it up for write_out ID, ref, alt, beta, pval
         ss_t.rename(columns = {"variant":"ID", "beta":BETA, "pval":PVAL}, inplace = True)
-        #NEAL has unusual case where occassionally ALT != minor allele. We check for that here:
-        #1/27- this doesn't matter at all. The beta is in terms of ALT all the time. So don't do anything.
-        #ss_t[REF] = np.where(ss_t["minor_allele"] == ss_t["f"],ss_t["s"],ss_t["f"])
-        #ss_t[ALT] = np.where(ss_t["minor_allele"] == ss_t["s"],ss_t["s"],ss_t["f"])  
         ss_t["ID"] = ss_t.location + ":" +  ss_t.REF + ":" + ss_t.ALT
         ss_t = ss_t[["ID", REF, ALT, BETA,PVAL]]
     elif ss_type == "DEFAULT":
@@ -1142,7 +1144,7 @@ if __name__ == '__main__':
     else:
         import pickle
         scores = pickle.load(open(args.debug_pickle, 'rb'))
-        patient_ids = ["empty"] * 2984
+        patient_ids = ["empty"] * num_pat
 
     writeScores(scores, patient_ids, args.split_scores, args.output)
     print("Scores written out to ", args.output + ".*.scores.tsv")
