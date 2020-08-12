@@ -8,22 +8,22 @@ suppressMessages(library(pROC))
 suppressMessages(library(rms))
 #TODO unit testing on each of the functions.
 #The stuff we regress on.
-prs <- read_tsv("/work-zfs/abattle4/ashton/prs_dev/scratch/calc_prs_testing/8-28-tests/results_1.tsv_0.0001.tsv")
+#prs <- read_tsv("/work-zfs/abattle4/ashton/prs_dev/scratch/calc_prs_testing/8-28-tests/results_1.tsv_0.0001.tsv")
 
-phenos <- read_tsv("/work-zfs/abattle4/ashton/prs_dev/CHS_race1_toy/pheno_mendrand.txt") %>% rename(ID = IID)
+#phenos <- read_tsv("/work-zfs/abattle4/ashton/prs_dev/CHS_race1_toy/pheno_mendrand.txt") %>% rename(ID = IID)
 
-comp_dat <- inner_join(prs, phenos) %>% select(ID, Score, MI)
-y <- comp_dat$MI
-g <- comp_dat$Score
-ncase <- sum(y)
-nt <- length(g)
-ncont <- nt-ncase
-K <- 0.05 #population prevelance
+#comp_dat <- inner_join(prs, phenos) %>% select(ID, Score, MI)
+#y <- comp_dat$MI
+#g <- comp_dat$Score
+#ncase <- sum(y)
+#nt <- length(g)
+#ncont <- nt-ncase
+#K <- 0.05 #population prevelance
 
-thd <- -qnorm(K,0,1) #K of the population to the left
-zv <- dnorm(thd) #the z score, normal desnity
-mv <- zv/K  #mean liability
-mv2 <- -mv*K/(1-K) #mean liability for healthy/control cases
+#thd <- -qnorm(K,0,1) #K of the population to the left
+#zv <- dnorm(thd) #the z score, normal desnity
+#mv <- zv/K  #mean liability
+#mv2 <- -mv*K/(1-K) #mean liability for healthy/control cases
 
 #Calculate R2 on observed scale using the linear model
 #@aram y: the outcome we are hoping to predict
