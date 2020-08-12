@@ -6,7 +6,7 @@ suppressMessages(library(tidyr))
 suppressMessages(library(dplyr))
 suppressMessages(library(Xmisc))
 
-source("./prs_tools/liability_pseudoR2.R")
+source("/work-zfs/abattle4/ashton/prs_dev/prs_tools/liability_pseudoR2.R")
 
 parser <- ArgumentParser$new()
 parser$add_description("Script to asses PRS results and their phenotypes. Currently (8/26) creates a histogram and a scatter plot, with points labelled by case/control disease condition.")
@@ -36,10 +36,12 @@ plotCorr <- function(dat, output, style_name, category_var, no_pvals)
     #dat <- dat[order(dat$pval_names),]
     dat <- arrange(dat, pval_names)
     dat$pval_names <- as.factor(dat$pval_names)
-    dat$logp <- -log2(dat$pval_beta)
+    lvs <- unlist(dat$pval_beta)
+    lvs <- as.numeric(lvs)
+    dat$logp <- (-log10(lvs))
     if(category_var == ""){
-        base <- ggplot(dat, aes(x = pval_names, y = r2, fill =logp )) + geom_bar(stat = "identity") + 
-            labs(x="P-value threshold", y = expression(paste(R ^ 2))) + labs(fill = "-log2(pval)") + scale_fill_gsea()
+        base <- ggplot(dat, aes(x = pval_names, y = r2, fill = logp )) + geom_bar(stat = "identity") + 
+            labs(x="P-value threshold", y = expression(paste(R ^ 2))) + labs(fill = "-log10(pval)") + scale_fill_gsea()
         if(no_pvals) {base}
         else {base + geom_text(aes(label=as.character(round(pval_beta, digits =3))), position=position_dodge(width = 0.9), vjust = -0.2)}
          
@@ -172,14 +174,15 @@ for (f in fl)
     #pval_names <- c(pval_names, str_extract(f, "[501]\\.*[\\-e\\d]+"))
 
     }
-    dat <- data.frame("pval_names" = pval_list, r2, pval_beta, "category"=cat_name_tracker)
+    dat <- data.frame("pval_names" = pval_list, r2, "pval_beta" = pval_beta, "category"=cat_name_tracker)
     write_tsv(dat, paste0(args$output,"_r2counts.tsv"))
     plotCorr(dat, args$output, r2_name,cat_split, args$hide_pvals)
     print(paste("Completed review for", f)) 
 }
 #Do that for each individually. Now get the
-dat <- data.frame(pval_names, r2)
-write_tsv(dat, paste0(args$output,"_r2counts.tsv"))
-if(!args$no_plot){
-plotCorr(dat, args$output, r2_name)
-}
+#dat <- data.frame(pval_names, r2)
+#print(dat)
+#write_tsv(dat, paste0(args$output,"_r2counts.tsv"))
+#if(!args$no_plot){
+#plotCorr(dat, args$output, r2_name)
+#}
