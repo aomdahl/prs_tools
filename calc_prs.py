@@ -38,7 +38,6 @@ LOG="log_file.txt"
 ################
 class MissingGenoHandler:
     def __init__(self, ss_threshold_lengths, nsamps, pvals): #Default constructor
-        print(ss_threshold_lengths)
         self.running_totals = dict()
         self.num_dropped = dict()
         self.num_samps = nsamps
@@ -124,7 +123,6 @@ class MissingGenoHandler:
 
             
     def updateScores(self, scores_):
-        print(scores_)
         self.__calculateMeans()
         self.__buildImputedAdjustor()
         if(len(scores_) > 1):
@@ -133,7 +131,6 @@ class MissingGenoHandler:
             #TODO add rounding here. Wait until finished testing for other purposes, but do it.
             #scores[p] = np.around(self.score_modifier[p] + scores[p],decimals = 5)
             scores_[p] = self.score_modifier[p] + scores_[p] 
-        print(scores_)
         return scores_
                 
 ######################################
@@ -408,7 +405,8 @@ def updateLog(*prints):
                 ostream.write(str(prints[i]) + ' ')
         else:
             for a in prints:
-                ostream.write(str(a) + " ")
+                if a != False:
+                    ostream.write(str(a) + " ")
         ostream.write("\n")
     
 def getEntryCount(fin, header):
@@ -560,7 +558,9 @@ def prepSNPIDs(snp_file, ss_file, ss_type, vplink = 2, max_p = 1):
     return local_geno, geno_id_list, inter_sum_stats
 
 def scoreCalculation(geno, betas):
-    #Note that what is done depends if the genotype data codes for the major or minor allele
+    if len(geno) < 2:
+        print("an empty list")
+        return 0
     try: 
         m = 2-geno
         if max(m) > 2 or min(m) < 0: #bad genotype data we missed.
@@ -573,6 +573,8 @@ def scoreCalculation(geno, betas):
              
         return np.dot(m, betas)
     except ValueError:
+        print(len(geno))
+        print(len(betas))
         print("It appears that the number of SNPs is not as expected. We suggest lowering the missing genotype filter threshold, and additional debugging.")   
 
 def recordSNPsWeights(curr_p,im, dat, SNPS_):
@@ -610,7 +612,7 @@ def recordSNPsWeights(curr_p,im, dat, SNPS_):
         prev_append_beta = DEBUG_DAT[BETA][curr_p]
 
 
-def linearGenoParse(snp_matrix, index_manager,pvals, scores, ss_ids, nsamps, no_nas, writeSNPListsOnly = True):
+def linearGenoParse(snp_matrix, index_manager,pvals, scores, ss_ids, nsamps,args, writeSNPListsOnly = True):
     """
     Parse the patient file
     @param snp_matrix -- the path to the massive genotype file
@@ -621,6 +623,7 @@ def linearGenoParse(snp_matrix, index_manager,pvals, scores, ss_ids, nsamps, no_
     @param writeSNPLists - basically a dummy variable to .
     """
     #############Set up data
+    no_nas = args.no_na
     patient_ids = list()
     report_index = 100
     #Plink (matrix) data index for readability
@@ -671,6 +674,9 @@ def linearGenoParse(snp_matrix, index_manager,pvals, scores, ss_ids, nsamps, no_
                         i = 0
                         for sel, beta in zip(index_manager.getAllGenoIndices(p), index_manager.getAllIndexedBetas(p)):
                             prev_score = 0
+                            if i == 0 and args.subsets_only: #we don't want the full list, just the sublist 
+                                i += 1
+                                continue
                             if j > 0:
                                 prev_p = pvals[j-1]
                                 prev_score = scores[i][prev_p][sample_counter]
@@ -679,14 +685,17 @@ def linearGenoParse(snp_matrix, index_manager,pvals, scores, ss_ids, nsamps, no_
                                 scores[i][p][sample_counter] = new_score
                                 if DEBUG: updateLog(str(patient_ids[-1]), str(new_score))
                                 continue
+
                             try:
+                                rel_genos  = itemgetter(*sel)(rel_data) #make sure this is the best way to do it.
                                 if no_nas:
-                                    new_genos = np.array(rel_data, dtype = np.float64)
+                                    new_genos = np.array(rel_genos, dtype = np.float64)
+                                    #new_genos = np.array(rel_data, dtype = np.float64)
                                 else:
-                                    if any([x in dat for x in na_set]):
-                                        new_genos = np.genfromtxt(rel_data, dtype = np.float64)
+                                    if any([x in rel_data for x in na_set]):
+                                        new_genos = np.genfromtxt(rel_genos, dtype = np.float64)
                                     else:
-                                        new_genos = np.array(rel_data, dtype = np.float64)
+                                        new_genos = np.array(rel_genos, dtype = np.float64)
 
                                     if len(index_manager.getAllGenoIndices(p)) > 1: #If we are snp subsetting.
                                         print("Please ensure genotype SNP file has no missing data before proceeding. BPRS is unable to handle snp sublists and NAs in matrix data.")
@@ -722,7 +731,7 @@ def linearGenoParse(snp_matrix, index_manager,pvals, scores, ss_ids, nsamps, no_
         sys.exit()     
     return scores, patient_ids #basically a pval:[list of snps]  
 
-def calculatePRS(pvals, snp_matrix, index_manager, snp_list, sample_count, no_nas):
+def calculatePRS(pvals, snp_matrix, index_manager, snp_list, sample_count, args):
     """
     Actually calculates the PRS Scores, and times the process
     Returns a list of scores and the corresponding patient_ids, as well as any relevant debug informtion if specified
@@ -737,7 +746,7 @@ def calculatePRS(pvals, snp_matrix, index_manager, snp_list, sample_count, no_na
     scores = list()
     for i in range(0, index_manager.numVariantSubsets()):
         scores.append({ p : ([0]*sample_count) for p in pvals}) #Error here, haven't specifid the number of samples yet.
-    scores, patient_ids = linearGenoParse(snp_matrix, index_manager,pvals, scores, snp_list, sample_count, no_nas)
+    scores, patient_ids = linearGenoParse(snp_matrix, index_manager,pvals, scores, snp_list, sample_count, args)
     end = time.time()
     print("Calculation and read in time:", str(end-start))
     return scores, patient_ids
@@ -999,20 +1008,21 @@ def getPatientIDs(snp_matrix):
     return [int(i.split("_")[0]) for i in tnames]
 
 
-def writeScores(scores, ids, subset_files,dest_path):
+def writeScores(scores, ids,args): #subset_files,dest_path):
 #outfile_name = args.output + os.path.splitext(matrices_for_parsing[i])[0] + ".scores.tsv"
     #Print the full one:
-    type(scores)
-    full = scores[0]
-    type(full)
-    full["IID"] = ids
-    tab_out = pd.DataFrame.from_dict(full)
-    tab_out = tab_out.set_index("IID")
-    tab_out = tab_out.round(5)
-    tab_out.to_csv(dest_path + '.full_prs.scores.tsv', sep = '\t') 
+    subset_files = args.split_scores
+    dest_path = args.output
+    if not args.subsets_only:
+        full = scores[0]
+        full["IID"] = ids
+        tab_out = pd.DataFrame.from_dict(full)
+        tab_out = tab_out.set_index("IID")
+        tab_out = tab_out.round(5)
+        tab_out.to_csv(dest_path + '.full_prs.scores.tsv', sep = '\t') 
 
     subset_list = subset_files.split(',')
-    if len(subset_list) != len(scores): #Subset_lists will always have 1, because its an empty string
+    if (len(subset_list) != len(scores)) and (len(subset_list) + 1 != len(scores)): #Subset_lists will always have 1, because its an empty string
         print("There was an error in scoring on subsets, scores were not recorded")
         print(len(subset_list))
         print(len(scores))
@@ -1081,6 +1091,7 @@ if __name__ == '__main__':
     parser.add_argument("--debug_pickle", help = "Specify a pickled score data if its available. For debugging.")
     #TODO implement the path for subsetting by an input list with the following argument
     parser.add_argument("--select_vars", help = 'Specify a list of variants that you want in the analysis NOT YET IMPLENENTED')
+    parser.add_argument("--subsets_only", help = "Score only on subsets indicated, not on the full list", action = "store_true", default = False)
     args = parser.parse_args()
     DEBUG = args.debug
     start = time.time()    
@@ -1136,7 +1147,7 @@ if __name__ == '__main__':
         snp_matrix = plinkToMatrix(geno_ids, args.plink_snps, local_pvar, args.plink_version, args.plink2_path)
     print("Parsing the genotype file...")
     if not args.debug_pickle:
-        scores, patient_ids = calculatePRS(pvals, snp_matrix, snp_index_manager,stats_complete[REFID], num_pat, args.no_na)
+        scores, patient_ids = calculatePRS(pvals, snp_matrix, snp_index_manager,stats_complete[REFID], num_pat, args)
         updateLog("Total number of SNPs for use in PRS calculations:", str(getEntryCount(geno_ids,False))) 
         if args.serialize:
             import pickle
@@ -1146,7 +1157,7 @@ if __name__ == '__main__':
         scores = pickle.load(open(args.debug_pickle, 'rb'))
         patient_ids = ["empty"] * num_pat
 
-    writeScores(scores, patient_ids, args.split_scores, args.output)
+    writeScores(scores, patient_ids, args)
     print("Scores written out to ", args.output + ".*.scores.tsv")
     stop = time.time()
     updateLog("Total runtime: "+ str(stop - start), True)
