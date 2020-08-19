@@ -836,7 +836,7 @@ def filterSumStatSNPs(ss, ss_type, keep_ambig_filter):
     #Set this to 0.3 from 0.4 on MArch 16
     ambig_filter = 0.3
     if keep_ambig_filter:
-        ambig_filter = 100
+        ambig_filter = -1
     ss_t = None
     out_name = "filtered_" + ss_type + ".ss"
     #Some room to beautify the code here...
