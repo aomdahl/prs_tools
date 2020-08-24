@@ -23,6 +23,7 @@ parser$add_argument("--r2", help = "Specify which type of r2 or pseudo-r2 to use
 parser$add_argument("--covars", type = "character", help = "Specify column names with covariates to correct for, such as 'gender'. Default is none. Write as covar1+covar2+..", default = "")
 parser$add_argument("--category_split", type = "character", help = "Specify different subgroups to score on, such as ancestry. This will score the groups separately.", default = "")
 parser$add_argument("--hide_pvals", type = "logical", help = "Select this to omit pvalues on bar plots", default = FALSE, action = "store_true")
+parser$add_argument("--irnt", type = "logical", help = "Select this to scale, center, and inverse-rank normalize the phenotype data.", default = FALSE, action = "store_true")
 parser$add_argument("--quantile", type = "logical", help = "Select this to create a quantile plot", default = FALSE, action = "store_true")
 parser$add_argument("--n_quants", type = "integer", help = "Specify the number of quantiles to put on quantile plot", default = 10)
 parser$add_argument("--quant_style", type = "character", help = "Specify the type of quantile plot: simple (just PRS quantiles vs phenotype), or relative (PRS quantiles vs effect size, corrected for covariates, relative to median quantile)", default = "relative")
@@ -178,10 +179,12 @@ for (f in fl)
         if(nrow(unique(full_dat[trait])) > 2 && !(args$case_control)) #Trait is continuous
         {
                 #Center and scale the data:
-                filt_list[[paste0("unscaled_", trait)]] = filt_list[[trait]]
-                temp_ <- as.numeric(scale(filt_list[[trait]]))
-                filt_list[[trait]] <- rankNorm(temp_)
-                #
+                if (args$irnt)
+                {
+                    filt_list[[paste0("unscaled_", trait)]] = filt_list[[trait]]
+                    temp_ <- as.numeric(scale(filt_list[[trait]]))
+                    filt_list[[trait]] <- rankNorm(temp_)
+                }
                 for (n in pval_names)
                 {
                     if(args$covars == "")
