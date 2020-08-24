@@ -5,8 +5,9 @@ suppressMessages(library(ggplot2))
 suppressMessages(library(tidyr))
 suppressMessages(library(dplyr))
 suppressMessages(library(Xmisc))
+suppressMessages(library(RNOmni))
 
-source("./liability_pseudoR2.R")
+source("/work-zfs/abattle4/ashton/prs_dev/prs_tools/liability_pseudoR2.R")
 
 parser <- ArgumentParser$new()
 parser$add_description("Script to asses PRS results and their phenotypes. Can create bar plot of scores by different groups, report R2 performance for different p-values, and quantile plots.")
@@ -135,7 +136,7 @@ trait <- args$risk_trait
 cat_split <- args$category_split
 if(cat_split == '')
 {
-    select_cols <- c("IID", trait, unlist(as.list(strsplit(args$covars, '+', fixed = T)[[1]])))
+        select_cols <- c("IID", trait, unlist(as.list(strsplit(args$covars, '+', fixed = T)[[1]])))
 }else{
     select_cols <- c("IID", trait,cat_split, unlist(as.list(strsplit(args$covars, '+', fixed = T)[[1]])))
 }
@@ -165,7 +166,7 @@ for (f in fl)
     #If the trait is continuous, do regular R2.
     for (cn in cat_names)
     {
-        #event of no category splits
+         #event of no category splits
         if(cn =="") { 
             filt_list <- full_dat
         } else {
@@ -173,67 +174,72 @@ for (f in fl)
             #filt_list <- filter(full_dat, cat_split == cn)
             filt_list <- full_dat[full_dat[[cat_split]] == cn,]
         }
-        
-    if(nrow(unique(full_dat[trait])) > 2 && !(args$case_control))
-    {
-            for (n in pval_names)
-            {
-                if(args$covars == "")
+            
+        if(nrow(unique(full_dat[trait])) > 2 && !(args$case_control)) #Trait is continuous
+        {
+                #Center and scale the data:
+                filt_list[[paste0("unscaled_", trait)]] = filt_list[[trait]]
+                temp_ <- as.numeric(scale(filt_list[[trait]]))
+                filt_list[[trait]] <- rankNorm(temp_)
+                #
+                for (n in pval_names)
                 {
-                    #r2 <- c(r2, cor(full_dat[trait], full_dat[n]))
-                    lmv <- lm(filt_list[[trait]] ~ filt_list[[n]])
-                    r2 <- c(r2, summary(lmv)$r.squared)
-                    pval_beta <- c(pval_beta, summary(lmv)$coefficients[2,4])
+                    if(args$covars == "")
+                    {
+                        #r2 <- c(r2, cor(full_dat[trait], full_dat[n]))
+                        lmv <- lm(filt_list[[trait]] ~ filt_list[[n]])
+                        r2 <- c(r2, summary(lmv)$r.squared)
+                        pval_beta <- c(pval_beta, summary(lmv)$coefficients[2,4])
+                    }
+                    else{
+                        
+                        pname = paste0("\`",n,"\`")
+                        f_full <- as.formula(paste(trait, paste(pname,"+", args$covars), sep = " ~ "))
+                        lmv_complete <- lm(f_full, data = filt_list)
+                        #lmv_corr <- lm(full_dat[[trait]] ~ full_dat[[n]] + full_dat[[args$covars]])
+                        f_part <-  as.formula(paste(trait, args$covars,sep = " ~ "))
+                        lmv_null <- lm(f_part, data = filt_list)
+                        #lmv_t <-  lm(full_dat[[trait]] ~ full_dat[[args$covars]])
+                        r2 <- c(r2, summary(lmv_complete)$r.squared - summary(lmv_null)$r.squared)
+                        pval_beta <- c(pval_beta, summary(lmv_complete)$coefficients[2,4])
+                    }
+                    cat_name_tracker <- c(cat_name_tracker, cn)
+                    pval_list <- c(pval_list, n)
                 }
-                else{
-                    
-                    pname = paste0("\`",n,"\`")
-                    f_full <- as.formula(paste(trait, paste(pname,"+", args$covars), sep = " ~ "))
-                    lmv_complete <- lm(f_full, data = filt_list)
-                    #lmv_corr <- lm(full_dat[[trait]] ~ full_dat[[n]] + full_dat[[args$covars]])
-                    f_part <-  as.formula(paste(trait, args$covars,sep = " ~ "))
-                    lmv_null <- lm(f_part, data = filt_list)
-                    #lmv_t <-  lm(full_dat[[trait]] ~ full_dat[[args$covars]])
-                    r2 <- c(r2, summary(lmv_complete)$r.squared - summary(lmv_null)$r.squared)
-                    pval_beta <- c(pval_beta, summary(lmv_complete)$coefficients[2,4])
+        } else {
+            #Some other plots
+            #ggplot(full_dat, aes(x=c(0), y =n)) + geom_jitter(position=position_jitter(0.1), aes(fill = full_dat[trait])) + xlim(-0.4, 0.4) + theme(axis.title.x=element_blank(), axis.text.x=element_blank(), axis.ticks.x=element_blank())
+            #ggsave(filename = paste0(args$output, n, "dotplot.png"))
+            #print("Succesfully generated dotplot.")
+            #}else #Its a case control trait
+            #{
+            #This step is problematic.
+            #full_dat[,4] <- as.factor(full_dat[,4])
+            #ggplot(full_dat,aes(x=Score, color = trait)) + geom_histogram() +labs(x="PRS", y="Count", title="Distribution of PRS Scores")
+            #ggsave(filename = paste0(args$output,substr(filename,1,nchar(f)-4), ".histogram.png"))
+            #ggplot(full_dat, aes(x=c(0), y = Score, color = MI)) + geom_jitter(position=position_jitter(0.1)) + xlim(-0.4, 0.4) + theme(axis.title.x=element_blank(), axis.text.x=element_blank(), axis.ticks.x=element_blank())
+            #ggsave(filename = paste0(args$output,substr(filename, 1, nchar(f)-4), ".dotplot.png"))
+            
+            
+            #otherwise
+            #TODO: set this up for correcting for covariates too
+            #Calculate Nagelkerke R
+            for(p in pval_names){
+                if(args$r2 == "nagelkerke")
+                {
+                    r2 <- c(r2, R2ObservedNagelkerke(trait,p, filt_list))
+                    r2_name <- "Nagelkerke" 
+                }
+                else
+                {
+                    r2 <- c(r2, R2LiabilityProbit(trait, p, filt_list))
+                    r2_name <- "Liability Scale (Probit)"
                 }
                 cat_name_tracker <- c(cat_name_tracker, cn)
-                pval_list <- c(pval_list, n)
+                pval_list <- c(pval_list,p)
             }
-    } else {
-        #Some other plots
-        #ggplot(full_dat, aes(x=c(0), y =n)) + geom_jitter(position=position_jitter(0.1), aes(fill = full_dat[trait])) + xlim(-0.4, 0.4) + theme(axis.title.x=element_blank(), axis.text.x=element_blank(), axis.ticks.x=element_blank())
-        #ggsave(filename = paste0(args$output, n, "dotplot.png"))
-        #print("Succesfully generated dotplot.")
-        #}else #Its a case control trait
-        #{
-        #This step is problematic.
-        #full_dat[,4] <- as.factor(full_dat[,4])
-        #ggplot(full_dat,aes(x=Score, color = trait)) + geom_histogram() +labs(x="PRS", y="Count", title="Distribution of PRS Scores")
-        #ggsave(filename = paste0(args$output,substr(filename,1,nchar(f)-4), ".histogram.png"))
-        #ggplot(full_dat, aes(x=c(0), y = Score, color = MI)) + geom_jitter(position=position_jitter(0.1)) + xlim(-0.4, 0.4) + theme(axis.title.x=element_blank(), axis.text.x=element_blank(), axis.ticks.x=element_blank())
-        #ggsave(filename = paste0(args$output,substr(filename, 1, nchar(f)-4), ".dotplot.png"))
-        
-        
-        #otherwise
-        #TODO: set this up for correcting for covariates too
-        #Calculate Nagelkerke R
-        for(p in pval_names){
-            if(args$r2 == "nagelkerke")
-            {
-                r2 <- c(r2, R2ObservedNagelkerke(trait,p, filt_list))
-                r2_name <- "Nagelkerke" 
-            }
-            else
-            {
-                r2 <- c(r2, R2LiabilityProbit(trait, p, filt_list))
-                r2_name <- "Liability Scale (Probit)"
-            }
-            cat_name_tracker <- c(cat_name_tracker, cn)
-            pval_list <- c(pval_list,p)
         }
-    }
-    #pval_names <- c(pval_names, str_extract(f, "[501]\\.*[\\-e\\d]+"))
+        #pval_names <- c(pval_names, str_extract(f, "[501]\\.*[\\-e\\d]+"))
 
     }
     dat <- data.frame("pval_names" = pval_list, r2, pval_beta, "category"=cat_name_tracker)
