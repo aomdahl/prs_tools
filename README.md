@@ -8,3 +8,7 @@ Developed as part of my research at JHU in the lab of Alexis Battle, starting in
     * calc_prs_dask.py (OBSOLETE): Early attempts at making the tool using dask. 
     * calc_prs_speed.py (OBSOLETE): PRS calculations (attempts) using dask and one-time id filtering.
     * calc_prs_lowmem.py (OBSOLETE): PRS calcuations that parse the file in a line-by-line manner
+* Item 1
+* Item 2
+  * Item 2a
+  * Item 2b
