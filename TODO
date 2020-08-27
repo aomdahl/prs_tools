@@ -1,0 +1,30 @@
+Things to add to:
+calc_prs.py
+    -Add reporting for subsets (how many at each threshold
+    -Add argument to include only certain SNPs in the analysis (very simple, match by ID)
+    -Figure out how to get it to run faster >_<
+    - Do a shuffling to get a background PRS score, show if r2 is significant (?)
+    -Find a way to not run plink2 so many times
+    - Improve SNP reporting- count the number of non ## lines, not just numbewr of lines in pvar
+    - Add minor allele frequency to default format
+prs_asses_lowmem.R
+    - Histogram of scores- are they normally distributed or not? (with clumping they ought to be by CLT)`   
+    - Fix the distribution plots and get those running
+COMPLETED:
+Serialize outputs between steps for speed (may be a nice option, not needed)
+Quantile plot (!)
+Added memory allocation options
+Validate clumping (possibly against PRSICE?) 
+Implemented addition versus multiplication step in calculation
+Removed forcing of bi-allelic snps, so only bi-allelic snps included.
+Handling of missing genotype data
+Resurrect Debug functionality (I want the gene lists again)
+Speed up splitting
+Remove bi-allelic SNPs (done in the summary stats data up front
+Output of NAs removed
+Total variants included from input SS file
+(basically filtering out at each stage)
+Number of people at each stage
+Number of ambiguous variants excluded
+Number of samples without phenotype.
+
