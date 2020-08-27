@@ -1,6 +1,6 @@
 # prs_tools
 Basic tools for performing polygenic risk score (PRS) analysis.
-Developed as part of my research at JHU in the lab of Alexis Battle, starting in August of 2019.\
+Developed as part of my research at JHU in the lab of Alexis Battle, starting in August of 2019.\ \
 **Scripts:**
 * *calc_prs.py*: Tool to perform Polygenic Risk score (PRS) analysis. Call `python calc_prs.py -h` for usage. This is the current version of the tool, which uses plink to write out plink genotype files and parse them line-by-line.
 * *liability_pseudoR2.R*: tools for calculating psuedo R2, which is used for case/control studies. Based on the implementation/pseudocode given by Lee et al in 2012 Genetic Epidemiology Paper, "A Better Coefficient of Determination for Genetic Profile Analysis"
