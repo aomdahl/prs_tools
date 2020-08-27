@@ -94,7 +94,7 @@ class MissingGenoHandler:
         for i in range(0, len(self.missingness_index[p])):
             ind = self.missingness_index[p][i]
             #NA locations refer to mean snps
-            if len(ind[INDEX]) == 0 and len(ind[B]) == 0: #thjis is our error.
+            if len(ind[INDEX]) == 0 and len(ind[B]) == 0: #this is our error.
                 continue
             else:
                 imputed_values = itemgetter(*ind[INDEX])(self.sample_means[p])
@@ -131,8 +131,7 @@ class MissingGenoHandler:
             #TODO add rounding here. Wait until finished testing for other purposes, but do it.
             #scores[p] = np.around(self.score_modifier[p] + scores[p],decimals = 5)
             scores_[p] = self.score_modifier[p] + scores_[p] 
-        return scores_
-                
+        return scores_          
 ######################################
 class SNPIndexManager:
     def __init__(self, pvals, ss = None): #Default constructor
@@ -336,7 +335,6 @@ class SNPIndexManager:
                 self.geno_extraction_map[p] = []
 
     def getGenoIndices(self, p): #formerly buildExtractionlist
-        input("calling geno indices partial")
         if not self.geno_extraction_map: #its empty
             self.__buildExtractionList()
             self.__syncSubsets()
@@ -381,8 +379,6 @@ class SNPIndexManager:
         for subset in self.geno_subset_extraction_maps: #ordered subsets.
             ret_list.append(subset[p][INDEX])
         return ret_list
-
-
 ######################################
 
 def memoryAllocation(set_as = ""):
@@ -437,6 +433,11 @@ def getPatientCount(snp_file, vers):
         print("It appears the plink family file is missing or has the incorrect file extension. Please check it out!")
         sys.exit()
 
+def setFtype(plink_version):
+    if plink_version == 2:
+        return " --pfile ", ".pvar"
+    else:
+        return " --bfile ", '.bim'
 
 def readInSummaryStats(s_path):
     #ID, ref, alt, beta, pvalue. Th
@@ -450,40 +451,6 @@ def readInSummaryStats(s_path):
     print("Data in memory...")
     return ss
 
-def indexSSByPval(pvals,ss):
-    """
-    Generates an index that lists the location of pvalues between a given range
-    i.e. betas < p= 0.001 [3,2,5,11]
-    i.e. betas from 0.001 < p < 0.01 are at [12,14,15,161]
-    i.e. betas from 0.01 < p < 1 are at [1,4,17,18...]
-    listed relative to the next smallest SNP, for the way we calculate downstream 
-    """
-    pvals_ref = dict() #dictionary containing a pointer for each p value
-    pvals.sort() #smallest one first
-    """
-    for p in pvals:
-        samp = ss[(ss[PVAL] <= float(p))]
-        pvals_ref[p] = [samp.index.values.tolist(), samp[BETA].values]      
-    """
-    prev = -1
-    for p in pvals:
-        samp = ss[(ss[PVAL] <= float(p)) & (ss[PVAL] > prev)]
-        pvals_ref[p] = [samp.index.tolist(), samp[BETA].values]
-        prev = float(p) 
-    
-    return pvals_ref
-        
-def prepSummaryStats(geno_ids, sum_path, pval_thresh):
-    """
-    This function uses awk to filter the summary stats by pvalue, and then reads them into a dask data structure.
-    """
-    #If the id is in the geno_ids file, and it passes the p-value threshold, keep it
-    command = "awk '($7 + 0.0 <= " + str(pval_thresh) + ") {print $0}' " + sum_path + " > ss.tmp"
-    check_call(command, shell = True) 
-    #Pro tip- in benchmarks, cut performs better here than awk
-    command = "cut -f 1 -d ' ' ss.tmp > ss_ids.tmp"
-    check_call(command, shell = True)
-    return "ss.tmp", "ss_ids.tmp"
 
 #This will extract the ids we want to be working with.
 #(args.plink_snps, args.sum_stats,args.ss_format, vplink = args.plink_version, max_p = max(pvals))
@@ -519,8 +486,10 @@ def prepSNPIDs(snp_file, ss_file, ss_type, vplink = 2, max_p = 1):
             local_geno = "local_geno.pvar" #We will be making our own pvar
             command = ''' awk '(!/##/ && /#/) {print $1"\t"$2"\tID\t"$4"\t"$5} (!/#/) {print $1"\t"$2"\t"$1":"$2":"$4":"$5"\t"$4"\t"$5}' ''' + snp_file + ".pvar > " + local_geno
             if vplink == 1:
-                local_geno = "local_geno.bim"
-                command = '''awk '{print $1"\t"$1":"$4":"$5":"$6"\t"$3"\t"$4"\t"$5"\t"$6}' ''' + snp_file + ".bim > " + local_geno
+                #local_geno = "local_geno.bim"
+                #command = '''awk '{print $1"\t"$1":"$4":"$5":"$6"\t"$3"\t"$4"\t"$5"\t"$6}' ''' + snp_file + ".bim > " + local_geno
+                print("Following filtering, this utility requires files in plink2 format. Please convert your plink1 data to plink2 to proceed")
+                sys.exit()
             try:
                 check_call(command, shell = True)
             except subprocess.CalledProcessError:
@@ -611,7 +580,6 @@ def recordSNPsWeights(curr_p,im, dat, SNPS_):
         prev_append_snp = DEBUG_DAT[SNP][curr_p]
         prev_append_beta = DEBUG_DAT[BETA][curr_p]
 
-
 def linearGenoParse(snp_matrix, index_manager,pvals, scores, ss_ids, nsamps,args, writeSNPListsOnly = True):
     """
     Parse the patient file
@@ -629,16 +597,13 @@ def linearGenoParse(snp_matrix, index_manager,pvals, scores, ss_ids, nsamps,args
     #Plink (matrix) data index for readability
     PDI = {"FID":0, "IID":1, "PAT":2, "MAT":3, "SEX":4, "PHENOTYPE" : 5, "SNPS":6}
     SNPS_ = PDI["SNPS"]
-    pvals.sort() #smallest to largest
     imputers = list()
     for i in range(0, index_manager.numVariantSubsets()):
         imputers.append(MissingGenoHandler(index_manager.getSSTotals(),nsamps,pvals)) #create the object to handle this....
     
     ############Parse the matrix file
-    print("opening", snp_matrix)
-    import mmap
-    import contextlib
-    #with open(snp_matrix + ".raw", 'r') as istream:
+    print("Opening", snp_matrix)
+    import mmap; import contextlib
     na_set = set(["NA", "-", "na", "NaN"])
     with open(snp_matrix + ".raw", 'r') as f:
         with contextlib.closing(mmap.mmap(f.fileno(), 0, access=mmap.ACCESS_READ)) as istream:
@@ -666,17 +631,13 @@ def linearGenoParse(snp_matrix, index_manager,pvals, scores, ss_ids, nsamps,args
                     rel_data = dat[SNPS_:]
                     patient_id = str(dat[PDI["IID"]])
                     patient_ids.append(patient_id)
-                    prev_score = 0
-                    new_score = 0
-                    
+                    prev_score = 0; new_score = 0
                     for j, p in enumerate(pvals):
-                        #snp_index = snp_indices[p][INDEX] #Index manager.
                         i = 0
                         for sel, beta in zip(index_manager.getAllGenoIndices(p), index_manager.getAllIndexedBetas(p)):
                             prev_score = 0
                             if i == 0 and args.subsets_only: #we don't want the full list, just the sublist 
-                                i += 1
-                                continue
+                                i += 1; continue
                             if j > 0:
                                 prev_p = pvals[j-1]
                                 prev_score = scores[i][prev_p][sample_counter]
@@ -685,18 +646,15 @@ def linearGenoParse(snp_matrix, index_manager,pvals, scores, ss_ids, nsamps,args
                                 scores[i][p][sample_counter] = new_score
                                 if DEBUG: updateLog(str(patient_ids[-1]), str(new_score))
                                 continue
-
                             try:
                                 rel_genos  = itemgetter(*sel)(rel_data) #make sure this is the best way to do it.
                                 if no_nas:
                                     new_genos = np.array(rel_genos, dtype = np.float64)
-                                    #new_genos = np.array(rel_data, dtype = np.float64)
                                 else:
                                     if any([x in rel_data for x in na_set]):
                                         new_genos = np.genfromtxt(rel_genos, dtype = np.float64)
                                     else:
                                         new_genos = np.array(rel_genos, dtype = np.float64)
-
                                     if len(index_manager.getAllGenoIndices(p)) > 1: #If we are snp subsetting.
                                         print("Please ensure genotype SNP file has no missing data before proceeding. BPRS is unable to handle snp sublists and NAs in matrix data.")
                                         sys.exit()
@@ -716,7 +674,7 @@ def linearGenoParse(snp_matrix, index_manager,pvals, scores, ss_ids, nsamps,args
                                 print(len(scores[i][p][sample_counter]))
                             if DEBUG: updateLog(str(patient_ids[-1]), str(new_score))
                             i += 1
-                dat = istream.readline() #previously a try-catch here if this errored, shouldn't need this anymore.
+                dat = istream.readline()
                 line_counter += 1
                 if sample_counter % report_index == 0:
                     print("Currently at individual/sample", sample_counter)
@@ -751,6 +709,63 @@ def calculatePRS(pvals, snp_matrix, index_manager, snp_list, sample_count, args)
     print("Calculation and read in time:", str(end-start))
     return scores, patient_ids
 
+def buildAlignHelper(ss, ss_type):
+    """
+    Create the "aligner.t" file that will be used to make sure the reference and target data line up.
+    """
+    if ss_type == "SAIGE":
+            first = '''awk '(NR >1) {print $1":"$2"\t"$4} ' ''' + ss + " | uniq > aligner.t"
+            check_call(first, shell = True)
+    elif ss_type == "NEAL":
+        #Separate the major allele from the other info
+        first = "cut -f 1 " + ss + " | tail -n +2 | cut -f 1,2 -d ':' > ids.t"
+        second = "cut -f 1 " + ss + " | tail -n +2 | cut -f 3 -d ':' > ref.t"
+        final = "paste ids.t ref.t | uniq > aligner.t"
+        check_call(first, shell = True)
+        check_call(second, shell = True)
+        check_call(final, shell = True)
+    elif ss_type == "DEFAULT": #ID REf ALT BETA Pvalue
+        call = "cut -f 1 " + ss + ''' | awk -F ":" '(NR > 1) {print $1":"$2"\t"$3}' | uniq > ./aligner.t'''
+        check_call(call, shell = True)
+    else:
+        print("Have not extended the method for type", ss_type, ". Please align Reference information manually")
+        sys.exit()
+    return "aligner.t"
+
+def plinkRemoveDupsHelper(old_plink, plink_version):
+    """
+    Create the "remove_multi.t" file that will be used to make sure no multi-allelic snps from target data are considered. 
+    """
+    ftype, ext = setFtype(plink_version)
+    #remove_multi = "cut -f 3 " + old_plink + ext + " | uniq -d > remove_multi.t"
+    remove_multi = '''awk  '/^[^#]/ { print $1":"$2}' ''' + old_plink + ext + " | uniq -d > remove_multi.t"
+    if plink_version == 1:
+        remove_multi = '''awk  '/^[^#]/ { print $1":"$4}' ''' + old_plink + ext + " | uniq -d > remove_multi.t"
+    check_call(remove_multi, shell = True)
+    return "remove_multi.t"
+
+def plinkUpdateIDsHelper(old_plink, plink_version):
+    """
+    Create the std_ids.t file for resetting the input ids for target data.
+    
+    ext = ".pvar"
+    id_comm = '''awk  '/^[^#]/ { print $3"\t"$1":"$2}' ''' + old_plink + ext + " > std_ids.t"
+    if plink_version == 1:
+        ext = ".bim"
+        id_comm = '''awk  '/^[^#]/ { print $2"\t"$1":"$4}' ''' + old_plink + ext + " > std_ids.t"
+    check_call(id_comm, shell = True)
+    return "std_ids.t"
+    """
+    #New version: replicate the pvar file fully, simply with new IDs.
+    ext = ".pvar"
+    id_comm = '''awk  '(!/##/) { print $1"\t"$2"\t"$1":"$2"\t"$4"\t"$5"\t"$6"\t"$7}' ''' + old_plink + ext + ''' | sed "1s/.*/#CHROM\tPOS\tID\tREF\tALT\tFILTER\tINFO/" > std_ids.t'''
+    if plink_version == 1:
+        ext = ".bim"
+        #id_comm = '''awk  '/^[^#]/ { print $2"\t"$1":"$4}' ''' + old_plink + ext + " > std_ids.t"
+        id_comm = '''awk  '(!/##/) { print $1"\t"$1":"$4"\t"$3"\t"$4"\t"$5"\t"$6}' ''' + old_plink + ext + '''  > std_ids.t'''
+    check_call(id_comm, shell = True)
+    return "std_ids.t"
+
 def alignReferenceByPlink(old_plink,plink_version, ss, ss_type, plink_path):
     """
     Make the reference file listing <IDs> <REF>
@@ -758,63 +773,35 @@ def alignReferenceByPlink(old_plink,plink_version, ss, ss_type, plink_path):
     Write this out to a new_plink file
     """
     print("Correcting for strand flips")
-    if ss_type == "SAIGE":
-        first = '''awk '(NR >1) {print $1":"$2"\t"$4} ' ''' + ss + " | uniq > aligner.t"
-        check_call(first, shell = True)
-    elif ss_type == "NEAL":
-        #Separate the major allele from the other info
-        first = "cut -f 1 " + ss + " | tail -n +2 | cut -f 1,2 -d ':' > ids.t"
-        second = "cut -f 1 " + ss + " | tail -n +2 | cut -f 3 -d ':' > ref.t"
-        final = "paste ids ref | uniq> aligner.t"
-        check_call(first, shell = True)
-        check_call(second, shell = True)
-        check_call(final, shell = True)
-    elif ss_type == "HELIX":
-        #ID CHR BP A1(effect) A2 P BETA
-        quick_call = "awk ' ( NR > 1) {print $1,$5}' " + ss + " | uniq > ./aligner.t"
-        check_call(quick_call, shell = True) 
-    elif ss_type == "DEFAULT": #ID REf ALT BETA Pvalue
-        call = "cut -f 1 " + ss + ''' | awk -F ":" '(NR > 1) {print $1":"$2"\t"$3}' | uniq > ./aligner.t'''
-        #call = "awk ' (NR > 1) {print $1,$2}' ./" + ss + " | uniq > ./aligner.t"
-        check_call(call, shell = True)
-    else:
-        print("Have not extended the method for type", ss_type, ". Please align Reference information manually")
-        sys.exit()
-    ftype = " --pfile "
-    ext = ".pvar"
-    #remove_multi = "cut -f 3 " + old_plink + ext + " | uniq -d > remove_multi.t"
-    remove_multi = "awk  '/^[^#]/ { print $3 }' " + old_plink + ext + " | uniq -d > remove_multi.t"
-    if plink_version == 1:
-        ftype = " --bfile "
-        ext = ".bim"
-        remove_multi = "cut -f 2 " + old_plink + ext + " | uniq -d > remove_multi.t"
-    check_call(remove_multi, shell = True)
-    #plink_call = "plink2" + ftype + old_plink  + " --not-chr X --out new_plink --ref-allele aligner.t --make-pgen --max-alleles 2" 
-    #The above fails to call it correctly, unsurprisingly
+    #Remove duplicates
+    remove_file = plinkRemoveDupsHelper(old_plink, plink_version)
+    new_ids_file = plinkUpdateIDsHelper(old_plink, plink_version)
+    ftype, ext = setFtype(plink_version)
+    
+        #In order to align, we need to make sure we have unique ids- so we account for multi-allelic SNPs and indels here.
+        #Filter out multi-allelic snps, X-chr snps,ilter variants with missing call rates > 0.05%, and recode the names to a standard.
     try:
-        #12/12 adding an additional call to filter stuff
-        #Filter out multi-allelic snps and X
-        #We need to do this before we can align, otherwise plink generates errors 
-        #feb/11- added --geno to filter variants with missing call rates > 0.05%. This is also done later, but better done here.
-        try:
-            plink_call_first = plink_path + "plink2 " + ftype + old_plink + " --geno 0.05 --make-pgen --out filtered_target --exclude remove_multi.t --not-chr X" + memoryAllocation()
-            check_call(plink_call_first, shell = True)
-        except subprocess.CalledProcessError:
-            updateLog("We have encountered an error calling plink2. Are all of your file paths corrected? Do you have plink2 installed. It can be found at https://www.cog-genomics.org/plink/2.0/", True)
-            updateLog(plink_call_first)
-            sys.exit() 
-        plink_call = plink_path + "plink2 --pfile filtered_target --ref-allele force aligner.t --make-pgen --out new_plink" + memoryAllocation()
-        #plink_call = "plink2" + ftype + old_plink + " --ref-allele aligner.t --make-pgen --out new_plink"
+        plink_call_first = (plink_path + "plink2 " + ftype + old_plink +  " --pvar " + new_ids_file +  " --geno 0.05 --make-pgen --out filtered_target --exclude " + remove_file + " --not-chr X" + memoryAllocation())
+        check_call(plink_call_first, shell = True)
+        #" --update-ids " + new_ids_file + <modified the pvar directly
+    except subprocess.CalledProcessError:
+        updateLog("We have encountered an error calling plink2. Are all of your file paths corrected? Do you have plink2 installed. It can be found at https://www.cog-genomics.org/plink/2.0/", True)
+        updateLog(plink_call_first)
+        sys.exit() 
+
+    #Build the aligner file
+    aligner_ref = buildAlignHelper(ss, ss_type)
+    plink_call = plink_path + "plink2 --pfile filtered_target --ref-allele force " + aligner_ref + " --make-pgen --out new_plink" + memoryAllocation()
+    try:
         check_call(plink_call, shell = True)
     except:
         print("It appears there was an error in aligning the reference, likely due to known alleles that we attempted to swap. We suggest correcting these alleles or aligining the reference strands indepndently using plink --ref-allele")
+        updateLog("Command yielding error:" + plink_call)
         sys.exit()
     if not DEBUG:
         if os.path.isfile("filtered_target.pvar"):
             check_call("rm filtered_target*", shell = True) 
-        clean_up = "rm remove_multi.t"
-        check_call(clean_up, shell = True)
-        clean_up = "rm aligner.t"
+        clean_up = "rm *.t"
         check_call(clean_up, shell = True)
     return "new_plink"
 
@@ -823,13 +810,13 @@ def filterSumStatSNPs(ss, ss_type, keep_ambig_filter):
     Filters summary statistics based on the specified file type, as follows:
     1) Remove anything more than bi-allelic
     2) Limit it to SNPs only
-    3) Limit to nonambiguous SNPs, if possible keep ambiguous snps MAF > 0.4
+    3) Limit to nonambiguous SNPs, if possible keep ambiguous snps MAF > 0.3
     4) Remove null beta values
     5) Remove X chromosome snps
     6) Write it out in the default format so its easier to digest downstream. (ID REF ALT BETA PVAL), ID standardized to chr:pos:ref:alt
     """
     filter_list = {"AG", "AC", "AT", "TA", "TC", "TG", "GC", "GT", "GA", "CG", "CT", "CA"}
-    noambig_list = {"AC", "AG", "CA", "CT", "GA", "GT", "TC", "TG"}
+    noambig_list =   {"AC", "AG", "CA", "CT", "GA", "GT", "TC", "TG"}
     ambig_list = {"AT", "TA", "GC", "CG"}
     sizes = {"start": 0,"non_bi": 0, "ambig":0, "na":0, "x":0}
     comment = {"ambig": "Ambiguous SNPs along with INDELS removed:", "na": "Variants with missing effect sizes removed:", "x": "Genes on the X chromosome removed:", "non_bi": "Non-biallelic SNPs removed:"}
@@ -1003,11 +990,6 @@ def plinkClump(reference_ld, clump_ref,clump_r, maf_thresh, geno_ids, ss):
     updateLog("SNPs remaining:", str(post_clump_count))
     return ss, geno_ids
 
-def getPatientIDs(snp_matrix):
-    tnames = list(snp_matrix.columns)[6:]
-    return [int(i.split("_")[0]) for i in tnames]
-
-
 def writeScores(scores, ids,args): #subset_files,dest_path):
 #outfile_name = args.output + os.path.splitext(matrices_for_parsing[i])[0] + ".scores.tsv"
     #Print the full one:
@@ -1067,7 +1049,7 @@ if __name__ == '__main__':
     parser.add_argument("-snps", "--plink_snps", help = "Plink file handle for actual SNP data (omit the .extension portion)")
     parser.add_argument("--preprocessing_done", action = "store_true", help = "Specify this if you have already run the first steps and generated the plink2 matrix with matching IDs. Mostly for development purposes.", required = "--split_scores" in sys.argv)
     parser.add_argument("-ss", "--sum_stats", help = "Path to summary stats file. Be sure to specify format if its not DEFAULT. Assumes tab delimited", required = True)
-    parser.add_argument("--ss_format", help = "Format of the summary statistics", default = "SAIGE", choices = ["DEFAULT", "SAIGE", "NEAL", "HELIX"])
+    parser.add_argument("--ss_format", help = "Format of the summary statistics", default = "SAIGE", choices = ["DEFAULT", "SAIGE", "NEAL"])
     parser.add_argument("--pvals", default = "ALL", help= "Specify which p-values to threshold at. To do multiple at once, list them separated by commas")
     parser.add_argument("--maf", default = 0.01, type = float, help = "Specify what MAF cutoff to use.")
     parser.add_argument("-o", "--output", default = "./prs_" + str(date.today()), help = "Specify where you would like the output file to be written and its prefix.")
@@ -1085,7 +1067,7 @@ if __name__ == '__main__':
     parser.add_argument("--no_ambiguous_snps", help = "Specify this if you wish to remove all ambiguous SNPs whatsover, regardless of MAF. Default is to keep those with MAF < 0.3", action = "store_true", default = False)
     parser.add_argument("--memory", help = "Specify memory allocation in MB for tasks called in plink. Default omits this argument", default = "")
     parser.add_argument("--plink2_path", help = "Specify the path to plink2 if its not in your PATH variable", default = "") 
-    parser.add_argument("--split_scores", help = "Specify (a) list(s) of variants to split scores by after filtering has been done already. Importantly happens after clumping: for other list inputs, do and then clump. Typically used when matrix has already been calculated", default = "")
+    parser.add_argument("--split_scores", help = "Specify (a) list(s) of variants to split scores by after filtering has been done already.P;ease list separated by commas (no spaces.) Importantly, this happens after clumping: for other list inputs, do and then clump. Typically used when matrix has already been calculated", default = "")
     parser.add_argument("--serialize", help = "If you want to write out scores debugging purposes", action = "store_true")
     parser.add_argument("--no_na", action = "store_true", help = "Specify this if you know your data contains no NAs.", default = False, required = "--split_scores" in sys.argv)
     parser.add_argument("--debug_pickle", help = "Specify a pickled score data if its available. For debugging.")
@@ -1130,6 +1112,8 @@ if __name__ == '__main__':
     num_pat = getPatientCount(args.plink_snps, args.plink_version)
     updateLog("Number of patients detected in sample:", str(num_pat), True)
     updateLog("Time for preprocessing (SNP filtering, reference alignment if specified, etc.):", str(time.time() - start), True)
+
+
     if args.clump:
         ss_parse, geno_ids = plinkClump(args.ld_ref, args.clump_ref,args.clump_r2, args.maf, geno_ids, ss_parse)
     print("Preprocessing complete")
@@ -1138,7 +1122,6 @@ if __name__ == '__main__':
         sys.exit()
 
     stats_complete = readInSummaryStats(ss_parse)
-    #snp_indices = indexSSByPval(pvals,stats_complete) #SNPIndexManager need the object
     snp_index_manager = SNPIndexManager(pvals,ss = stats_complete) #constructor allows for adding sum stats.
     snp_index_manager.addSubsets(args.split_scores.split(','))
     if args.plink_snp_matrix:
