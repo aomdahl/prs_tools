@@ -967,9 +967,13 @@ def plinkClump(reference_ld, clump_ref,clump_r,clump_kb, maf_thresh, keep_long_r
         check_call(command, shell = True)
         #Run plink clumping,do not use --clump-best
         #TODO:testing to see if removing long-range LD gives us a boost, as many methods seem to do this.
-        plink_command = "plink --bfile " + reference_ld + " --clump clump_ids.tmp --clump-p1 1 --clump-p2 1 --clump-r2 " + str(clump_r) + " --clump-kb " + str(clump_kb) + "  --clump-field P --clump-snp-field SNP --maf " + str(maf_thresh) + memoryAllocation() + " --exclude range /work-zfs/abattle4/ashton/prs_dev/prs_tools/long_range_ld_removal.tsv"
+        
+        long_range_path = os.path.dirname(__file__)
+        plink_command = "plink --bfile " + reference_ld + " --clump clump_ids.tmp --clump-p1 1 --clump-p2 1 --clump-r2 " + str(clump_r) + " --clump-kb " + str(clump_kb) + "  --clump-field P --clump-snp-field SNP --maf " + str(maf_thresh) + memoryAllocation() + " --exclude range " + long_range_path + "/long_range_ld_removal.tsv"
+ 
+        #plink_command = "plink --bfile " + reference_ld + " --clump clump_ids.tmp --clump-p1 1 --clump-p2 1 --clump-r2 " + str(clump_r) + " --clump-kb " + str(clump_kb) + "  --clump-field P --clump-snp-field SNP --maf " + str(maf_thresh) + memoryAllocation() + " --exclude range /work-zfs/abattle4/ashton/prs_dev/prs_tools/long_range_ld_removal.tsv"
         if keep_long_range:
-            plink_command = "plink --bfile " + reference_ld + " --clump clump_ids.tmp --clump-p1 1 --clump-p2 1 --clump-r2 " + str(clump_r) + " --clump-kb 250 --clump-field P --clump-snp-field SNP --maf " + str(maf_thresh) + memoryAllocation()
+            plink_command = "plink --bfile " + reference_ld + " --clump clump_ids.tmp --clump-p1 1 --clump-p2 1 --clump-r2 " + str(clump_r) + " --clump-kb " + str(clump_kb) + "  --clump-field P --clump-snp-field SNP --maf " + str(maf_thresh) + memoryAllocation()
         updateLog(plink_command)
         check_call(plink_command, shell = True)
         clump_file = "plink.clumped" #The default output name with flag clump
@@ -1097,7 +1101,7 @@ if __name__ == '__main__':
     if args.preprocessing_done:
         if not args.clump:
             print("Please note that you have not provided clumping data, so no clumping will be performed.")
-        updateLog("Assuming data preprocessing- including filtering by summary stats, aligning references, and clumping- has already been completed. Proceeding with PRS calculations...", True)
+        updateLog("Assuming data preprocessing- including filtering by summary stats, aligning references- has already been completed. Proceeding with PRS calculations...", True)
     if not args.prefiltered_ss and not args.preprocessing_done:
         print("Filtering ambiguous SNPs and indels from SS data...")
         args.sum_stats = filterSumStatSNPs(args.sum_stats, args.ss_format, args.no_ambiguous_snps)
@@ -1119,7 +1123,7 @@ if __name__ == '__main__':
 
 
     if args.clump:
-        ss_parse, geno_ids = plinkClump(args.ld_ref, args.clump_ref,args.clump_r2,args.clump_kb, args.maf, args.keep_lr_ld geno_ids, ss_parse)
+        ss_parse, geno_ids = plinkClump(args.ld_ref, args.clump_ref,args.clump_r2,args.clump_kb, args.maf, args.keep_lr_ld, geno_ids, ss_parse)
     print("Preprocessing complete")
     if args.preprocess_only:
         updateLog("Plink file data has been updated into new_plink.*. Use this in downstream runs.", True)
