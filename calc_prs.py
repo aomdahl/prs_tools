@@ -580,7 +580,7 @@ def recordSNPsWeights(curr_p,im, dat, SNPS_):
         prev_append_snp = DEBUG_DAT[SNP][curr_p]
         prev_append_beta = DEBUG_DAT[BETA][curr_p]
 
-def linearGenoParse(snp_matrix, index_manager,pvals, scores, ss_ids, nsamps,args, writeSNPListsOnly = True):
+def linearGenoParse(snp_matrix, index_manager,pvals, scores, ss_ids, nsamps,args):
     """
     Parse the patient file
     @param snp_matrix -- the path to the massive genotype file
@@ -694,7 +694,7 @@ def calculatePRS(pvals, snp_matrix, index_manager, snp_list, sample_count, args)
     Actually calculates the PRS Scores, and times the process
     Returns a list of scores and the corresponding patient_ids, as well as any relevant debug informtion if specified
     @param snp_matrix- the path to the enormous snp matrix
-    @param snp_indices: the information of snp_indices at each p-value
+    @param index_manager: the information of snp_indices at each p-value
     @param snp_list: a series object containing the name of each snp
     """
     #Seraj shoutout
@@ -929,11 +929,10 @@ def plinkToMatrix(snp_keep, args, local_pvar, vplink, plink_path):
     if os.path.isfile("mat_form_tmp.raw"):
         #Check that its SNPs match the SNPs we have
         with open("mat_form_tmp.raw", 'r') as istream:
-            header_line = istream.readline().strip()
+            header_line = istream.readline().strip().split()
         if len(header_line) - 6 == getEntryCount(snp_keep, False):
             print("Using currently existing genotype matrix...")
             return "mat_form_tmp"
-
     syscall = " --pfile "
     annot =  " --pvar "
     if vplink == 1:
@@ -949,7 +948,7 @@ def plinkToMatrix(snp_keep, args, local_pvar, vplink, plink_path):
     return "mat_form_tmp"
 
 #TODO: fix the id syst" + clumping, make sure consisent
-def plinkClump(reference_ld, clump_ref,clump_r, maf_thresh, geno_ids, ss):
+def plinkClump(reference_ld, clump_ref,clump_r,clump_kb, maf_thresh, keep_long_range, geno_ids, ss):
     """
     Run plink and clump, get the new list of ids.
     Select just these from the summary statistics.
@@ -967,7 +966,10 @@ def plinkClump(reference_ld, clump_ref,clump_r, maf_thresh, geno_ids, ss):
          #Gives SNP id and p-value to assit in clumping
         check_call(command, shell = True)
         #Run plink clumping,do not use --clump-best
-        plink_command = "plink --bfile " + reference_ld + " --clump clump_ids.tmp --clump-p1 1 --clump-p2 1 --clump-r2 " + str(clump_r) + " --clump-kb 250 --clump-field P --clump-snp-field SNP --maf " + str(maf_thresh) + memoryAllocation()
+        #TODO:testing to see if removing long-range LD gives us a boost, as many methods seem to do this.
+        plink_command = "plink --bfile " + reference_ld + " --clump clump_ids.tmp --clump-p1 1 --clump-p2 1 --clump-r2 " + str(clump_r) + " --clump-kb " + str(clump_kb) + "  --clump-field P --clump-snp-field SNP --maf " + str(maf_thresh) + memoryAllocation() + " --exclude range /work-zfs/abattle4/ashton/prs_dev/prs_tools/long_range_ld_removal.tsv"
+        if keep_long_range:
+            plink_command = "plink --bfile " + reference_ld + " --clump clump_ids.tmp --clump-p1 1 --clump-p2 1 --clump-r2 " + str(clump_r) + " --clump-kb 250 --clump-field P --clump-snp-field SNP --maf " + str(maf_thresh) + memoryAllocation()
         updateLog(plink_command)
         check_call(plink_command, shell = True)
         clump_file = "plink.clumped" #The default output name with flag clump
@@ -1045,7 +1047,7 @@ def writeScoresDebug(debug_tab, destination):
 
 if __name__ == '__main__':
 
-    parser = argparse.ArgumentParser(description = "Basic tools for calculating rudimentary Polygenic Risk Scores (PRSs). This uses PLINK bed/bim/fam files and GWAS summary stats as standard inputs. Current version requires both plink2 and plink1")
+    parser = argparse.ArgumentParser(description = "Basic tools for calculating rudimentary Polygenic Risk Scores (PRSs). This uses PLINK bed/bim/fam files and GWAS summary stats as standard inputs. Current version requires both plink2 and plink1.")
     parser.add_argument("-snps", "--plink_snps", help = "Plink file handle for actual SNP data (omit the .extension portion)")
     parser.add_argument("--preprocessing_done", action = "store_true", help = "Specify this if you have already run the first steps and generated the plink2 matrix with matching IDs. Mostly for development purposes.", required = "--split_scores" in sys.argv)
     parser.add_argument("-ss", "--sum_stats", help = "Path to summary stats file. Be sure to specify format if its not DEFAULT. Assumes tab delimited", required = True)
@@ -1074,6 +1076,8 @@ if __name__ == '__main__':
     #TODO implement the path for subsetting by an input list with the following argument
     parser.add_argument("--select_vars", help = 'Specify a list of variants that you want in the analysis NOT YET IMPLENENTED')
     parser.add_argument("--subsets_only", help = "Score only on subsets indicated, not on the full list", action = "store_true", default = False)
+    parser.add_argument("--clump_kb", help = "Specify the window size for clumping in kb.", default = 250)
+    parser.add_argument("--keep_lr_ld", help = "Keep regions of long-range LD, which are removed by default. Coordinates used are in hg19, so omit this if in GrCH38.", action = "store_true", default = False) 
     args = parser.parse_args()
     DEBUG = args.debug
     start = time.time()    
@@ -1115,7 +1119,7 @@ if __name__ == '__main__':
 
 
     if args.clump:
-        ss_parse, geno_ids = plinkClump(args.ld_ref, args.clump_ref,args.clump_r2, args.maf, geno_ids, ss_parse)
+        ss_parse, geno_ids = plinkClump(args.ld_ref, args.clump_ref,args.clump_r2,args.clump_kb, args.maf, args.keep_lr_ld geno_ids, ss_parse)
     print("Preprocessing complete")
     if args.preprocess_only:
         updateLog("Plink file data has been updated into new_plink.*. Use this in downstream runs.", True)
