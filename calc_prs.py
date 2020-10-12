@@ -405,6 +405,21 @@ def updateLog(*prints):
                     ostream.write(str(a) + " ")
         ostream.write("\n")
     
+def quickSubset(left, right, overwrite = False):
+    """
+    Quickly select all the entries in the right file that match the column 1 id of the right file.
+    This will overwrite the right file by default, or will pass on the path to a new file
+    """
+    outfile = "subsetted_" + right
+    command = "awk '(FNR == NR) {arr[$1];next} ($1 in arr) {print $0}' " + left + " " + right + " > "  + outfile
+    
+    if overwrite:
+        outfile = right
+        command = "awk '(FNR == NR) {arr[$1];next} ($1 in arr) {print $0}' " + left + " " + right + " > t && mv t " + outfile
+        
+    check_call(command, shell = True)
+    return outfile
+
 def getEntryCount(fin, header):
     """
     Quickly count the number of entries in a file
@@ -423,6 +438,9 @@ def firstColCopy(f1, f2):
     """
     command = " awk '{print $1}' " + f1 + " > " + f2
     check_call(command, shell = True)
+
+def selectSubset(sublist, gen_ids, ss_ids, over_args):
+    return quickSubset(sublist, gen_ids, overwrite = over_args), quickSubset(sublist, ss_ids, overwrite = over_args)
 
 def getPatientCount(snp_file, vers):
     try:
@@ -526,12 +544,20 @@ def prepSNPIDs(snp_file, ss_file, ss_type, vplink = 2, max_p = 1):
         firstColCopy(inter_sum_stats, geno_id_list)
     return local_geno, geno_id_list, inter_sum_stats
 
-def scoreCalculation(geno, betas):
+def scoreCalculation(geno, betas, nonstd_encoding):
+    """
+    Actually performs the scoring calculation
+    @gen: the genotypes of our sample
+    @beta: their effect size weights
+    @nonstd_encoding: True if encoding represents REF allele dosage (as opposed to the standard ALT allele dosage; our dbGAp data had nonstandard)
+    """
     if len(geno) < 2:
         print("an empty list")
         return 0
     try: 
-        m = 2-geno
+        m = geno
+        if nonstd_encoding:
+            m = 2-geno
         if max(m) > 2 or min(m) < 0: #bad genotype data we missed.
             print("Missing data detected. Attempting to correct appropriately")
             removal_indices = np.where(m >2)
@@ -664,7 +690,7 @@ def linearGenoParse(snp_matrix, index_manager,pvals, scores, ss_ids, nsamps,args
                                 #Find the NA
                                 scores[i][p][sample_counter] = float('nan')
                                 continue #don't calculate the score, simply proceed to the next iteration of p. 
-                            new_score = scoreCalculation(new_genos, beta) + prev_score
+                            new_score = scoreCalculation(new_genos, beta, args.inverted_snp_encoding) + prev_score
                             try:
                                 scores[i][p][sample_counter] = new_score
                             except IndexError:
@@ -1078,10 +1104,12 @@ if __name__ == '__main__':
     parser.add_argument("--no_na", action = "store_true", help = "Specify this if you know your data contains no NAs.", default = False, required = "--split_scores" in sys.argv)
     parser.add_argument("--debug_pickle", help = "Specify a pickled score data if its available. For debugging.")
     #TODO implement the path for subsetting by an input list with the following argument
-    parser.add_argument("--select_vars", help = 'Specify a list of variants that you want in the analysis NOT YET IMPLENENTED')
+    parser.add_argument("--select_vars", help = 'Specify a list of variants that you want in the analysis. Please submit list in the format chr#:pos:ref:alt')
     parser.add_argument("--subsets_only", help = "Score only on subsets indicated, not on the full list", action = "store_true", default = False)
     parser.add_argument("--clump_kb", help = "Specify the window size for clumping in kb.", default = 250)
     parser.add_argument("--keep_lr_ld", help = "Keep regions of long-range LD, which are removed by default. Coordinates used are in hg19, so omit this if in GrCH38.", action = "store_true", default = False) 
+    parser.add_argument("--no_overwrite", help = "Do not overwrite a local ss_filt or geno_ids file, make a new one. May create problems downstream, unclear.", action = "store_true", default = False) 
+    parser.add_argument("--inverted_snp_encoding", help = "Specify this if SNP encodins of 0/1/2 is opposite of usual, such that 2 represents a homozgyous of the the reference allele (i.e. not the standard alternate allele dosage", default = False, action = "store_true")
     args = parser.parse_args()
     DEBUG = args.debug
     start = time.time()    
@@ -1121,6 +1149,9 @@ if __name__ == '__main__':
     updateLog("Number of patients detected in sample:", str(num_pat), True)
     updateLog("Time for preprocessing (SNP filtering, reference alignment if specified, etc.):", str(time.time() - start), True)
 
+    #Note that preprocessing can be done without any sublists. This is good to know! But clumping will need to be done each time.
+    if args.select_vars:
+       geno_ids, ss_parse = selectSubset(args.select_vars, geno_ids, ss_parse, not args.no_overwrite) #if no_overwrite is True, select subset will not overwrite.  
 
     if args.clump:
         ss_parse, geno_ids = plinkClump(args.ld_ref, args.clump_ref,args.clump_r2,args.clump_kb, args.maf, args.keep_lr_ld, geno_ids, ss_parse)
