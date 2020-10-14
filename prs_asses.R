@@ -125,7 +125,7 @@ if(length(args$prs_results) == 0)
     quit(save = "no")
 }
 #get the files we are looking at
-
+print("Starting assesment....")
 fl <- c(args$prs_results)
 r2 <- c()
 pval_beta <- c()
@@ -251,7 +251,7 @@ for (f in fl)
 }
 
 #Do that for each individually. Now get the
-dat <- data.frame(pval_names, r2)
+dat <- data.frame(pval_names, r2, pval_beta)
 write_tsv(dat, paste0(args$output,"_r2counts.tsv"))
 
 if(args$quantile)
