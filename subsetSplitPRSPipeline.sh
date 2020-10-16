@@ -22,7 +22,7 @@ python $PRS  -snps $TARGET  -ss $SS -o ./$ANNOT -pv 2 --ss_format NEAL --preproc
 
 #Step 2: Select from those snps the ones for which we have annotations
 #Requires the annotation database name and column number
-
+*************
 python extractAnnots.py --output extract_list.tsv 
 
 #Get the median score in the extract list
@@ -30,16 +30,14 @@ python extractAnnots.py --output extract_list.tsv
 MED=`getMedian extract_list.tsv 2`
 
 #Split into upper and lower lists with awk.
-awk -v med="$MED" '($2 + 0.0  > med) {print $1}' > high_${ANNOT}.txt
-awk -v med="$MED" '($2 + 0.0  < med) {print $1}' > low_${ANNOT}.txt
+awk -v med="$MED" '($2 + 0.0  > med) {print $1}' extract_list.tsv > high_${ANNOT}.txt
+awk -v med="$MED" '($2 + 0.0  < med) {print $1}' extract_list.tsv > low_${ANNOT}.txt
 awk '{print $1}' extract_list.tsv > combined_snps.txt
 
 #Pair these by p-value. Might also be worth looking into a maf-pairing approach.
 
-Rscript /work-zfs/abattle4/ashton/prs_dev/prs_tools/annotation_analysis/assign_paired_variants.R low_${ANNOT}.txt high_${ANNOT}.txt $SS combined_snps.txt ./split_lists --n_null 1
-#^^MOdify the above script to take in a third list
-#Modify pipeline to allow you to run multiple matched random background lists to do a general comparison of performance
-#Run the high_annot version 
+Rscript /work-zfs/abattle4/ashton/prs_dev/prs_tools/annotation_analysis/assign_paired_variants.R --lower low_${ANNOT}.txt --upper high_${ANNOT}.txt --sum_stats $SS --null combined_snps.txt --output ./split_lists 
+#Calculate scores on each list subset. May actually be faster to use the 
 mkdir -p high_annot
 cd high_annot
 python $PRS  -snps ../new_plink  -ss ../filtered_NEAL.ss -o ./$ANNOT -pv 2 --ss_format DEFAULT --preprocessing_done --no_na --select_vars ../split_lists.paired_high_annots.tsv &
