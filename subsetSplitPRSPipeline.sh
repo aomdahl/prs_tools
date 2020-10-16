@@ -36,24 +36,29 @@ awk '{print $1}' extract_list.tsv > combined_snps.txt
 
 #Pair these by p-value. Might also be worth looking into a maf-pairing approach.
 
-Rscript /work-zfs/abattle4/ashton/prs_dev/prs_tools/annotation_analysis/assign_paired_variants.R --lower low_${ANNOT}.txt --upper high_${ANNOT}.txt --sum_stats $SS --null combined_snps.txt --output ./split_lists 
+Rscript /work-zfs/abattle4/ashton/prs_dev/prs_tools/annotation_analysis/assign_paired_variants.R --lower low_${ANNOT}.txt --upper high_${ANNOT}.txt --sum_stats $SS --null combined_snps.txt --output ./split_lists --inverted_snp_encoding 
+
 #Calculate scores on each list subset. May actually be faster to use the 
+#Note that here, I am runnign each separately. This allows me to get things moving a bit faster
+#however, at some point you may want to run these steps combined into 1. Then you should do the following:
+#python $PRS  -snps ../new_plink  -ss ../filtered_NEAL.ss -o ./$ANNOT -pv 2 --ss_format DEFAULT --preprocessing_done --no_na --select_vars ./extract_list.tsv --split_scores  ../split_lists.paired_high_annots.tsv, ../split_lists.paired_low_annots.tsv
+
 mkdir -p high_annot
 cd high_annot
-python $PRS  -snps ../new_plink  -ss ../filtered_NEAL.ss -o ./$ANNOT -pv 2 --ss_format DEFAULT --preprocessing_done --no_na --select_vars ../split_lists.paired_high_annots.tsv &
+python $PRS  -snps ../new_plink  -ss ../filtered_NEAL.ss -o ./$ANNOT -pv 2 --ss_format DEFAULT --preprocessing_done --no_na --select_vars ../split_lists.paired_high_annots.tsv --inverted_snp_encoding &
 #Run the low_annot version
 cd ../
 mkdir -p low_annot
 cd low_annot
-python $PRS  -snps ../new_plink  -ss ../filtered_NEAL.ss -o ./$ANNOT -pv 2 --ss_format DEFAULT --preprocessing_done --no_na --select_vars ../split_lists.paired_low_annots.tsv &
+python $PRS  -snps ../new_plink  -ss ../filtered_NEAL.ss -o ./$ANNOT -pv 2 --ss_format DEFAULT --preprocessing_done --no_na --select_vars ../split_lists.paired_low_annots.tsv --inverted_snp_encoding &
 
 #Run the standard background version
 cd ../
 #aside- will there be an issue because geno_ids not in the local directory? I hope not:
 mkdir -p std 
-python $PRS  -snps ../new_plink  -ss ../filtered_NEAL.ss -o ./$ANNOT -pv 2 --ss_format DEFAULT --preprocessing_done --no_na --select_vars ../_lists_combined.tsv
+python $PRS  -snps ../new_plink  -ss ../filtered_NEAL.ss -o ./$ANNOT -pv 2 --ss_format DEFAULT --preprocessing_done --no_na --select_vars ../_lists_combined.tsv --inverted_snp_encoding &
 cd ../
-
+wait
 #Now asses them all
 Rscript $PRS_ASSES --prs_results ./low_annot/$ANNOT.full_prs.scores.tsv --pheno ${PHENO} --output ${ANNOT}_low --risk_trait $TRAIT --covars age+gender+PC1+PC2+PC3
 Rscript $PRS_ASSES --prs_results ./std_annot/$ANNOT.full_prs.scores.tsv --pheno ${PHENO} --output ${ANNOT}_std --risk_trait $TRAIT --covars age+gender+PC1+PC2+PC3
