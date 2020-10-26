@@ -21,7 +21,7 @@ parser$add_argument("--delim", type = "character", help = "Specify which kind of
 parser$add_argument("--no_plot", help = "Specify this to say no plot to be included", action = "store_true", type = "logical", default = FALSE)
 parser$add_argument("--r2", help = "Specify which type of r2 or pseudo-r2 to use. Default is either linear R2 or liability scale.", default = "linear", type = "character")
 parser$add_argument("--covars", type = "character", help = "Specify column names with covariates to correct for, such as 'gender'. Default is none. Write as covar1+covar2+..", default = "")
-parser$add_argument("--category_split", type = "character", help = "Specify different subgroups to score on, such as ancestry. This will score the groups separately.", default = "")
+parser$add_argument("--category_split", type = "character", help = "Specify different subgroups to score on, such as ancestry. Argument should match the name of a column passed to pheno. This will score the groups separately, and report a separate R2 for each score.", default = "")
 parser$add_argument("--hide_pvals", type = "logical", help = "Select this to omit pvalues on bar plots", default = FALSE, action = "store_true")
 parser$add_argument("--irnt", type = "logical", help = "Select this to scale, center, and inverse-rank normalize the phenotype data.", default = FALSE, action = "store_true")
 parser$add_argument("--quantile", type = "logical", help = "Select this to create a quantile plot", default = FALSE, action = "store_true")
