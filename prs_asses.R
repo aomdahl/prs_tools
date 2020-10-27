@@ -2,11 +2,11 @@ suppressMessages(library(stringr))
 suppressMessages(library(magrittr))
 suppressMessages(library(readr))
 suppressMessages(library(ggplot2))
-suppressMessages(library(tidyr))
+suppressMessages(library(tidyverse))
 suppressMessages(library(dplyr))
 suppressMessages(library(Xmisc))
 suppressMessages(library(RNOmni))
-
+suppressMessages(library(cowplot))
 source("/work-zfs/abattle4/ashton/prs_dev/prs_tools/liability_pseudoR2.R")
 
 parser <- ArgumentParser$new()
@@ -66,13 +66,13 @@ plotQuantile <- function(dat, trait, output, n_quants, style_name, covars_arg)
         else
         {for_plot <- for_plot %>% select(IID, all_of(n), quantile, all_of(trait)) %>% filter(!(is.na(trait))) %>% ungroup()}
         xounts <- count(for_plot, quantile)
-        avgs <- for_plot %>% group_by(quantile) %>% dplyr::summarize(avg = mean(DBP), std_dev = sd(DBP)) %>% arrange(quantile) %>% mutate(num = xounts$n) %>% mutate(sem = std_dev/sqrt(num))
+        avgs <- for_plot %>% group_by(quantile) %>% dplyr::summarize(avg = mean(!!as.symbol(trait)), std_dev = sd(!!as.symbol(trait))) %>% arrange(quantile) %>% mutate(num = xounts$n) %>% mutate(sem = std_dev/sqrt(num))
         #Simple one
         if (style_name == "simple")
         {
             plt <- (ggplot(avgs, aes(x=quantile, y=avg)) + geom_pointrange(aes(ymin=avg-sem, ymax=avg+sem)) + 
                         ylab(trait) + xlab("Quantile") + scale_x_continuous(breaks=c(1:n_quants), labels=c(1:n_quants)) + 
-                        ggtitle(paste("Simple Quantile plot, p = ", n)) + scale_color_npg())
+                        ggtitle(paste("Simple Quantile plot, p = ", n)) + theme_minimal_grid(12)) #+ scale_color_npg())
             
             ggsave(filename = paste0(output, ".quantile_plot.",n, ".", style_name, ".png"), plot = plt, height = 7, width = 8.5) 
         } else
