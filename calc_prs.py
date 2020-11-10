@@ -330,7 +330,11 @@ class SNPIndexManager:
         for p in self.pvals:
             ss_snps[p] = self.snp_indices[p][INDEX]
             if len(ss_snps[p]) > 0:
-                self.geno_extraction_map[p] = (itemgetter(*ss_snps[p])(self.var_map))
+                extract = (itemgetter(*ss_snps[p])(self.var_map))
+                if isinstance(extract, list):
+                    self.geno_extraction_map[p] = extract
+                else:
+                    self.geno_extraction_map[p] = [extract]
             else:
                 self.geno_extraction_map[p] = []
 
@@ -551,7 +555,7 @@ def scoreCalculation(geno, betas, nonstd_encoding):
     @beta: their effect size weights
     @nonstd_encoding: True if encoding represents REF allele dosage (as opposed to the standard ALT allele dosage; our dbGAp data had nonstandard)
     """
-    if len(geno) < 2:
+    if len(geno) < 1: #previously 2, changed it to 1
         print("an empty list")
         return 0
     try: 
@@ -586,23 +590,41 @@ def recordSNPsWeights(curr_p,im, dat, SNPS_):
     prev_append_beta = []
     for p in pvals:
         DEBUG_DAT[BETA][curr_p] = im.getIndexedBetas(curr_p)
-        if len(im.getAllGenoIndices(p)[0]) == 0:
+        #if len(im.getAllGenoIndices(p)[0]) == 0:
+        if im.getAllGenoIndices(p)[0] == "0":
             DEBUG_DAT[SNP][curr_p] = []
         else:
             #sel = (itemgetter(*snp_index)(var_map))  #Index manager
             #sel = index_manager.getGenoIndices(p)
             sel = im.getAllGenoIndices(curr_p)[0] #I would prefer to keep it the old way, but for working sake.....
+            if len(sel) == 0:
+                print("Note there are no SNPS at p=", p)
+                DEBUG_DAT[SNP][curr_p] = []
             try:
-                DEBUG_DAT[SNP][curr_p] = ((itemgetter(*sel)(dat[SNPS_:])))
+                extract = list((itemgetter(*sel)(dat[SNPS_:]))) 
             except TypeError as e:
-                print(sel)
-                print(e)
-                print("SNP ID", SNP)
-                print("Pvalue", curr_p)
-                print("Errors detected in matrix header. Will not print snps used.")
-                continue
-        DEBUG_DAT[BETA][curr_p] = np.concatenate((DEBUG_DAT[BETA][curr_p],prev_append_beta))
-        DEBUG_DAT[SNP][curr_p] = np.concatenate((DEBUG_DAT[SNP][curr_p], prev_append_snp))
+                sel = np.array(sel[0])                    
+                extract = list((itemgetter(*sel)(dat[SNPS_:]))) 
+                
+            DEBUG_DAT[SNP][curr_p] = extract
+                      
+            if isinstance(extract, list):
+                DEBUG_DAT[SNP][curr_p] = extract
+            else:
+                #When only one match exists, it only returns one, not a list
+                DEBUG_DAT[SNP][curr_p] = list(extract) 
+                
+        try:
+            DEBUG_DAT[BETA][curr_p] = np.concatenate((DEBUG_DAT[BETA][curr_p],prev_append_beta))
+            DEBUG_DAT[SNP][curr_p] = np.concatenate((DEBUG_DAT[SNP][curr_p], prev_append_snp))
+        except ValueError as e:
+            print("sel", sel)
+            print("curr p", curr_p)
+            print("EXTRACTED results", extract)
+            print("snp value", DEBUG_DAT[SNP][curr_p])
+            print("inddexed value", DEBUG_DAT[BETA][curr_p])
+            print(e)
+            sys.exit()
         prev_append_snp = DEBUG_DAT[SNP][curr_p]
         prev_append_beta = DEBUG_DAT[BETA][curr_p]
 
@@ -673,7 +695,17 @@ def linearGenoParse(snp_matrix, index_manager,pvals, scores, ss_ids, nsamps,args
                                 if DEBUG: updateLog(str(patient_ids[-1]), str(new_score))
                                 continue
                             try:
+                                #Nov 2 changes- issues with just one output. Truly a pain in the rear
+                                if isinstance(sel, list):
+                                    if isinstance(sel[0], tuple):
+                                        sel = list(sel[0])
+                                elif not isinstance(sel, tuple):
+                                    sel = list(sel)
+                                else:
+                                    sel = list(sel[0])
                                 rel_genos  = itemgetter(*sel)(rel_data) #make sure this is the best way to do it.
+                                if not isinstance(rel_genos, tuple):
+                                    rel_genos = [rel_genos]
                                 if no_nas:
                                     new_genos = np.array(rel_genos, dtype = np.float64)
                                 else:
@@ -685,6 +717,10 @@ def linearGenoParse(snp_matrix, index_manager,pvals, scores, ss_ids, nsamps,args
                                         print("Please ensure genotype SNP file has no missing data before proceeding. BPRS is unable to handle snp sublists and NAs in matrix data.")
                                         sys.exit()
                                     new_genos = imputers[i].handleNAs(new_genos, beta, p)
+                            except TypeError as e:
+                                    print(e)
+                                    print("sel", sel)
+                                    sys.exit()
                             except IndexError:
                                 updateLog("Patient ", patient_id, "appears to have missing entries and will not be scored at",p,"threshold", True)
                                 #Find the NA
@@ -698,6 +734,7 @@ def linearGenoParse(snp_matrix, index_manager,pvals, scores, ss_ids, nsamps,args
                                 print("pvalue", p)
                                 print("Sample count", sample_counter)
                                 print(len(scores[i][p][sample_counter]))
+                                input()
                             if DEBUG: updateLog(str(patient_ids[-1]), str(new_score))
                             i += 1
                 dat = istream.readline()
@@ -1074,6 +1111,22 @@ def writeScoresDebug(debug_tab, destination):
                 else:
                     write_s  = write_s + '\t'
             ostream.write(write_s[:-1] + '\n')
+"""
+def cleanup(debug):
+    if debug: return
+    else:
+        from os import path
+        if path.exists("new_plink.pvar"):
+            #delete themn
+            os.remove("demofile.txt")
+        if path.exists("mat_form_tmp.raw"):
+        if path.exists("local_geno.pvar"):
+
+new_plink.psam
+-rw-r--r--  1 aomdahl1@jhu.edu abattle4   308306761 Nov  9 09:22 new_plink.pvar
+-rw-r--r--  1 aomdahl1@jhu.edu abattle4 43032844194 Nov  9 09:25 new_plink.pgen
+"""
+
 
 if __name__ == '__main__':
 

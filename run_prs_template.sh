@@ -10,7 +10,7 @@ LDREF="/work-zfs/abattle4/ashton/prs_dev/1000genomes_refLD/ref"
 PHENO="/work-zfs/abattle4/marios/HF_GWAS/cohorts/CHS/merged_genotypes/CNV370v1/preimpute/race1/unrelated/pheno_mendrand.txt"
 #To run the tool in just one step:
 python $SC/prs_tools/calc_prs.py -snps $GENO -ss $SUMSTAT -o results_jan9 -pv 2 --reset_ids --ss_format NEAL --align_ref --clump --ld_ref $LDREF  --no_na
- 
+#TODO: update this  
 
 #You can separately run the preprocessing to make sure everything is working alright, but this isn't necessary
 python $SC/prs_tools/calc_prs.py -snps $GENO -ss $SUMSTAT  -o results_jan9 -pv 2 --reset_ids --ss_format NEAL --align_ref --clump --ld_ref $LDREF --preprocess_only 
@@ -24,6 +24,6 @@ python $SC/prs_tools/calc_prs.py -snps new_plink -ss filtered_NEAL.ss --pvals 1,
 PA="/work-zfs/abattle4/ashton/prs_dev/prs_tools"
 module load gcc/5.5.0
 module load R
-Rscript $PA/prs_asses.R  --prs_results results_jan9.tsv --pheno $PHENO --output figs_chs_race1 --risk_trait DBP --covars gender
+Rscript $PA/prs_asses.R  --prs_results results_jan9.tsv --pheno $PHENO --output figs_chs_race1 --risk_trait DBP --covars gender+age+PC1
     #this will generate a plot showing the r2 of scores with DBP, as well as a matrix, corr_count.tsv, that shows the raw r2 scores
 
