@@ -27,12 +27,36 @@ parser$add_argument("--irnt", type = "logical", help = "Select this to scale, ce
 parser$add_argument("--quantile", type = "logical", help = "Select this to create a quantile plot", default = FALSE, action = "store_true")
 parser$add_argument("--n_quants", type = "integer", help = "Specify the number of quantiles to put on quantile plot", default = 10)
 parser$add_argument("--quant_style", type = "character", help = "Specify the type of quantile plot: simple (just PRS quantiles vs phenotype), or relative (PRS quantiles vs effect size, corrected for covariates, relative to median quantile)", default = "relative")
+parser$add_argument("--per_snp_r2", type = "character", help = "Specify this argument and pass the correct log file to calculate the per-snp r2 in addition to the regualr r2", default = "")
 parser$helpme()
 args <- parser$get_args()
 options(readr.num_columns = 0)
 #A function to plot the correlation bar plots
 
-plotCorr <- function(dat, output, style_name, category_var, no_pvals)
+getSNPCounts <- function(log_file)
+{
+    alldat = readLines(log_file)
+    t <- seq(from = length(alldat), to = 1, by = -1)
+    counts <- c()
+    pvals <- c()
+    switch = 0
+    for (i in t)
+    {
+      if (grepl("Number of final SNPs used at", alldat[i], fixed=  T))
+      {
+        pvals <- c(pvals, str_match(alldat[i], "at  ([[:digit:][:punct:]e]+) ")[2])
+        counts <- c(counts, str_match(alldat[i], ": ([[:digit:]]+) $")[2])
+      }else{
+        if(switch) #we just came out of the region, just the first one
+        {break}
+        switch = FALSE
+      }
+    }
+    return(data.frame("pval_names" = as.factor(pvals), "snp_counts" = as.numeric(counts)))
+}
+
+
+plotCorr <- function(dat, output, style_name, category_var, no_pvals, per_snp=FALSE)
 {
     library("ggsci")
     dat$pval_names <- as.numeric(as.character(dat$pval_names))
@@ -41,17 +65,25 @@ plotCorr <- function(dat, output, style_name, category_var, no_pvals)
     dat$logp <- -log10(dat$pval_beta)
     if(category_var == ""){
         base <- ggplot(dat, aes(x = pval_names, y = r2, fill =logp )) + geom_bar(stat = "identity") + 
-            labs(x="P-value threshold", y = expression(paste(R ^ 2))) + labs(fill = "-log10(pval)") + scale_fill_gsea()
+             labs(fill = "-log10(pval)") + scale_fill_gsea()
         if(no_pvals) {base}
-        else {base + geom_text(aes(label=as.character(round(pval_beta, digits =3))), position=position_dodge(width = 0.9), vjust = -0.2)}
+        else {base <- base + geom_text(aes(label=as.character(round(pval_beta, digits =3))), position=position_dodge(width = 0.9), vjust = -0.2)}
          
     } else {
         base <- ggplot(dat, aes(x = pval_names, y = r2, fill =category )) + geom_bar(stat = "identity", position = "dodge") + 
-            labs(x="P-value threshold", y = expression(paste(R ^ 2))) + scale_fill_discrete(name = category_var)
-        if(no_pvals) {base}
-        else {base  + geom_text(aes(label = as.character(round(pval_beta, digits = 3))), position = position_dodge(width = 0.9), vjust = -0.3, size = 3)}
+            scale_fill_discrete(name = category_var)
+        if(no_pvals) {base <- base}
+        else {base <- base  + geom_text(aes(label = as.character(round(pval_beta, digits = 3))), position = position_dodge(width = 0.9), vjust = -0.3, size = 3)}
     }
-     
+    if(!per_snp)
+    { 
+        base <- base + labs(x="P-value threshold", y = expression(paste(R ^ 2)))
+    } else 
+    {
+        base <- base + labs(x="P-value threshold", y = expression(paste(Per_snp_R ^ 2)))
+    }
+
+    base + theme_minimal_grid(10) 
     ggsave(filename = paste0(output, "bar_plot.",style_name, ".png"), height = 7, width = 8.5) 
 }
 #Make a quantile plot
@@ -248,7 +280,7 @@ for (f in fl)
     }
     dat <- data.frame("pval_names" = pval_list, r2, pval_beta, "category"=cat_name_tracker)
     #write_tsv(dat, paste0(args$output,"_r2counts.tsv"))
-    plotCorr(dat, args$output, r2_name,cat_split, args$hide_pvals)
+    plotCorr(dat, args$output, r2_name,cat_split, args$hide_pvals, per_snp=F)
 }
 
 #Do that for each individually. Now get the
@@ -258,6 +290,17 @@ write_tsv(dat, paste0(args$output,"_r2counts.tsv"))
 if(args$quantile)
 {
     plotQuantile(full_dat, trait, args$output, args$n_quants, args$quant_style, args$covars)
+}
+if(args$per_snp_r2 != "")
+{
+    snp_counts <- getSNPCounts(args$per_snp_r2) %>% arrange(pval_names)
+    t <- dat %>% arrange(pval_names)
+    full <- cbind(t,(snp_counts %>% select(snp_counts))) %>% mutate("r2_per_snp" = r2/snp_counts)
+    full$pval_names <- as.numeric(as.character(full$pval_names))
+    full <- arrange(full, pval_names)
+    write_tsv(full, paste0(args$output, "_per-snp-r2.tsv"))
+    full <- full %>% select(-r2) %>% rename("r2" = r2_per_snp)
+    plotCorr(full, paste0(args$output, "_per-snp-r2"), r2_name,cat_split,args$hide_pvals, per_snp = T)
 }
 print("Finished plotting!")
 
