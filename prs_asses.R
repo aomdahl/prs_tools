@@ -78,8 +78,9 @@ plotQuantile <- function(dat, trait, output, n_quants, style_name, covars_arg)
         } else
         {
             #Nuanced one that allows for correcting for covariate- identify reference quantile- the median one.
-            med_val <- which(for_plot[[n]] == median(for_plot[[n]]))
-            med_quant <- for_plot[med_val,]$quantile
+            #med_val <- which(for_plot[[n]] == median(for_plot[[n]]))
+            #med_quant <- for_plot[med_val,]$quantile
+            med_quant <- n_quants/2#the one in the middle, right?
             beta <- c()
             std_error <- c()
             #$Compare each other quantile to the reference quantile
@@ -109,7 +110,7 @@ plotQuantile <- function(dat, trait, output, n_quants, style_name, covars_arg)
             quantile_covars <- data.frame(beta, std_error, quant = 1:n_quants) 
             plt <- (ggplot(quantile_covars, aes(x=quant, y=beta)) + geom_pointrange(aes(ymin=beta-std_error, ymax=beta+std_error)) + 
                         ylab("Effect size") + xlab("Quantile") +  scale_x_continuous(breaks=c(1:n_quants), labels=c(1:n_quants)) + 
-                        ggtitle(paste("Relative Quantile plot, p = ", n, "Covariates:", covars_arg)))
+                        ggtitle(paste("Relative Quantile plot, p = ", n, "Covariates:", covars_arg))) + theme_minimal_grid(12)
             ggsave(filename = paste0(output, ".quantile_plot.",n, ".", style_name, ".png"), plot = plt, height = 7, width = 8.5) 
         }
        
