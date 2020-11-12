@@ -39,13 +39,14 @@ getSNPCounts <- function(log_file)
     t <- seq(from = length(alldat), to = 1, by = -1)
     counts <- c()
     pvals <- c()
-    switch = 0
+    switch = FALSE
     for (i in t)
     {
       if (grepl("Number of final SNPs used at", alldat[i], fixed=  T))
       {
         pvals <- c(pvals, str_match(alldat[i], "at  ([[:digit:][:punct:]e]+) ")[2])
         counts <- c(counts, str_match(alldat[i], ": ([[:digit:]]+) $")[2])
+        switch = TRUE
       }else{
         if(switch) #we just came out of the region, just the first one
         {break}
