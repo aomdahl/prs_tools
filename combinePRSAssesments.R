@@ -1,12 +1,13 @@
-library(tidyr)
-library(data.table)
-library(readr)
-library(dplyr)
-library(stringr)
-library(cluster)
-suppressMessages(library(Xmisc))
-library(ggplot2)
 
+suppressMessages(library(tidyr))
+suppressMessages(library(data.table))
+suppressMessages(library(readr))
+suppressMessages(library(dplyr))
+suppressMessages(library(stringr))
+suppressMessages(library(cluster))
+suppressMessages(library(Xmisc))
+suppressMessages(library(ggplot2))
+suppressMessages(library(cowplot))
 
 parser <- ArgumentParser$new()
 parser$add_description("Quickly combine histograms")
@@ -42,15 +43,17 @@ low_corr <- read_tsv(low) %>% mutate(source= args$label_2)  %>% mutate(pval_name
 high_corr <- read_tsv(high) %>% mutate(source = args$label_1)%>% mutate(pval_names = as.factor(pval_names))
 
 r2_col <- "r2"
+lab_name <- expression(paste("R" ^ "2"))
 if(args$per_snp_r2)
 {
     r2_col <- "r2_per_snp"
+    lab_name <- expression(paste("Per-snp R" ^ "2"))
 }
 
 if(args$mixed_results == "")
 {
     fin <- rbind(low_corr, high_corr) #%>% mutate(bonf_p = p.adjust(pval_beta, method ="bonferroni"))
-    ggplot(data = fin, aes((pval_names), !!sym(r2_col), fill = source)) + geom_bar(stat = "identity", position = "dodge") + xlab("GWAS Pvalue thresholds") + ylab(expression(paste("R"^"2"))) + scale_fill_discrete(name = "Sample sets") + theme_minimal_grid(12) # labels = c(args$label_1, args$label_2))
+    ggplot(data = fin, aes((pval_names), !!sym(r2_col), fill = source)) + geom_bar(stat = "identity", position = "dodge") + xlab("GWAS Pvalue thresholds") + ylab(lab_name) + scale_fill_discrete(name = "Sample sets") + theme_minimal_grid(12) # labels = c(args$label_1, args$label_2))
 }else{
 if (args$multi_mixed != "")
 {
@@ -77,8 +80,26 @@ if (args$multi_mixed != "")
 }else {
 mixed <- read_tsv(args$mixed_results) %>% mutate(source= args$label_mixed)  %>% mutate(pval_names = as.factor(pval_names))
 fin <- rbind(low_corr, high_corr, mixed)
-ggplot(data = fin, aes((pval_names), !!sym(r2_col), fill = source)) + geom_bar(stat = "identity", position = "dodge") + xlab("GWAS Pvalue thresholds") + ylab(expression(paste("R"^"2"))) + scale_fill_discrete(name = "Sample sets") + theme_minimal_grid(12)#, labels = c(args$label_1, args$label_2, args$label_mixed))
+ggplot(data = fin, aes((pval_names), !!sym(r2_col), fill = source)) + geom_bar(stat = "identity", position = "dodge") + xlab("GWAS Pvalue thresholds") + ylab(lab_name) + scale_fill_discrete(name = "Sample sets") + theme_minimal_grid(12)#, labels = c(args$label_1, args$label_2, args$label_mixed))
 }
 }
 ggsave(paste0(outpath, ".png"), height = 6, width = 9)
+
+#To calculate the trait heritability, its a simple matter of 
+#(trait_r2_per_snp) * (total_r2_per_snp) ^-1
+#Usually its (trait_r2/full_r2)/(trait_snps/total_snps), but when you move things around it comes to be the same thing!
+
+if(args$group_heritability & args$per_snp_r2 & args$mixed_results != "")
+{   
+    high_corr <- arrange(high_corr, as.numeric(pval_names))
+    low_corr <- arrange(low_corr, as.numeric(pval_names))
+    mixed <- arrange(mixed, as.numeric(pval_names))
+    enrich_high <- high_corr$r2_per_snp/mixed$r2_per_snp
+    enrich_low <- low_corr$r2_per_snp/mixed$r2_per_snp
+    herit_high <- high_corr$r2/mixed$r2
+    herit_low <- low_corr$r2/mixed$r2
+
+    ret <- data.frame("pval" = mixed$pval_names, "full_r2" = mixed$r2, "full_per_snp_r2" = mixed$r2_per_snp, "group1_prop_h2" = herit_high, "group1_enrichment" = enrich_high, "group2_prop_h2" = herit_low, "group2_enrichment" = enrich_low) %>% mutate_if(is.numeric, round, digits = 4)
+    write_tsv(ret, paste0(output, "_herit-enrich.tsv"))
+}   
 
