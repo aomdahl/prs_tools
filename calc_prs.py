@@ -1111,21 +1111,23 @@ def writeScoresDebug(debug_tab, destination):
                 else:
                     write_s  = write_s + '\t'
             ostream.write(write_s[:-1] + '\n')
-"""
-def cleanup(debug):
-    if debug: return
+
+
+def cleanup(debug, keep_matrix, preprocessed):
+    if debug:
+        updateLog("Not cleaning up files, debug requested")
     else:
         from os import path
-        if path.exists("new_plink.pvar"):
-            #delete themn
-            os.remove("demofile.txt")
-        if path.exists("mat_form_tmp.raw"):
-        if path.exists("local_geno.pvar"):
 
-new_plink.psam
--rw-r--r--  1 aomdahl1@jhu.edu abattle4   308306761 Nov  9 09:22 new_plink.pvar
--rw-r--r--  1 aomdahl1@jhu.edu abattle4 43032844194 Nov  9 09:25 new_plink.pgen
-"""
+        if path.exists("new_plink.pvar") and not preprocessed:
+            os.remove("new_plink.pvar")
+            os.remove("new_plink.pgen")
+            os.remove("new_plink.psam")
+        if keep_matrix: return
+        if path.exists("mat_form_tmp.raw"): os.remove('mat_form_tmp.raw')
+        if path.exists("local_geno.pvar"): os.remove("local_geno.pvar")
+        updateLog("Large genotype files have been cleaned up")
+
 
 
 if __name__ == '__main__':
@@ -1163,6 +1165,7 @@ if __name__ == '__main__':
     parser.add_argument("--keep_lr_ld", help = "Keep regions of long-range LD, which are removed by default. Coordinates used are in hg19, so omit this if in GrCH38.", action = "store_true", default = False) 
     parser.add_argument("--no_overwrite", help = "Do not overwrite a local ss_filt or geno_ids file, make a new one. May create problems downstream, unclear.", action = "store_true", default = False) 
     parser.add_argument("--inverted_snp_encoding", help = "Specify this if SNP encodins of 0/1/2 is opposite of usual, such that 2 represents a homozgyous of the the reference allele (i.e. not the standard alternate allele dosage", default = False, action = "store_true")
+    parser.add_argument("--keep_matrix", action = "store_true", help = "Select this if you wish to keep the human readable matrix after analysis. pipeline by default will remove it", default = False)
     args = parser.parse_args()
     DEBUG = args.debug
     start = time.time()    
@@ -1235,5 +1238,9 @@ if __name__ == '__main__':
     writeScores(scores, patient_ids, args)
     print("Scores written out to ", args.output + ".*.scores.tsv")
     stop = time.time()
+    print("Cleaning up large data files...")
+    
     updateLog("Total runtime: "+ str(stop - start), True)
+    cleanup(args.debug, args.keep_matrix, args.preprocessing_done)
+    
     #TODO: Add cleanup functionality, remove the massive files you've made.
