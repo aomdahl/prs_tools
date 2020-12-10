@@ -33,66 +33,99 @@
     parser$add_argument("--jackknife_ci", type = "logical", help = "Include jackknife CIs", default = FALSE, action = "store_true")
     parser$add_argument("--bootstrap_ci", type = "character", help = "Include boostrap CIs, specify type (norm,basic, perc,bca)", default = "")
     parser$add_argument("--analytic_ci", type = "logical", help = "calculate CIs using the formula", default = FALSE, action = "store_true")
+    parser$add_argument("--jackknife_95", type = "logical", help = "calculate CIs using Jackknife empirical bounds", default = FALSE, action = "store_true")
     parser$helpme()
     args <- parser$get_args()
     options(readr.num_columns = 0)
     #A function to plot the correlation bar plots
 
-    jackknifeBootstrap <- function(trait, n, data)
+    getModels <- function(trait, n, data_, covars = "")
     {
-        #model.lm <- formula(BMI ~ `5e-08`)
-        pval <- paste0('\`', n, '\`')
-    model.lm <- as.formula(paste(trait, pval, sep = " ~ "))
-    theta <- function(x,xdata)
-    {
-        t <- lm(model.lm, data =xdata[x,])
-        summary(t)$r.squared
+        # function to obtain R-Squared from the data
+        if (covars == "")
+        {
+            pval <- paste0('\`', n, '\`')
+            models.lm <- c(as.formula(paste(trait, pval, sep = " ~ ")))
+        } else { #we have covariates
+            pname = paste0("\`",n,"\`")
+            f_full <- as.formula(paste(trait, paste(pname,"+", covars), sep = " ~ "))
+            f_part <-  as.formula(paste(trait, covars,sep = " ~ "))
+            models.lm <- c(f_full, f_part)
+        }
+        return(models.lm)
     }
-    j <- jackknife(1:nrow(data), theta, xdata= data)
+    iterFunct <- function(formulas, data, indices)
+    {
+            if (length(formulas) > 1)
+            {
+                lmv_complete <- lm(formulas[[1]], data =data[indices,])
+                lmv_null <- lm(formulas[[2]], data =data[indices,])
+                return(summary(lmv_complete)$r.squared - summary(lmv_null)$r.squared)
+            }else{
+                t <- lm(formulas[[1]], data =data[indices,])
+                return(summary(t)$r.squared)
+            }
+     }
+        
+
+
+    jackknifeBootstrap <- function(trait, n, data, covars_)
+    {
+    models.lm <- getModels(trait, n, data, covars = covars_)
+    j <- jackknife(1:nrow(data), iterFunct, data= data, formulas = models.lm)
+    max_i <- which(j$jack.values == max(j$jack.values))
+    min_i <- which(j$jack.values == min(j$jack.values))
+    print(paste("Max: index = ", max_i, "value = ", j$jack.values[max_i]))
+     print(data[max_i,])
+    print(paste("Min: index = ", min_i, "value = ", j$jack.values[min_i]))
+    print(data[min_i,])
     CI <- qt(1-0.025, nrow(data)-1) * j$jack.se
-    print("SE of jacknife values, sqrt(var/n)")
-    print(sqrt(var(j$jack.values))/sqrt(nrow(data)))
-    print("SE from jacknife function")
-    print(j$jack.se)
     return(c(CI, mean(j$jack.values)))
     }
 
-    straightBootstrap <- function(trait, n, data_, boot_type)
+    jackknife95 <- function(trait, n, data, covars_)
+    {
+    models.lm <- getModels(trait, n, data, covars = covars_)
+    j <- jackknife(1:nrow(data), iterFunct, data= data, formulas = models.lm)
+    max_i <- which(j$jack.values == max(j$jack.values))
+    min_i <- which(j$jack.values == min(j$jack.values))
+    CIs <- quantile(j$jack.values, probs = c(0.025,0.975))
+    return(CIs)
+    }
+
+
+    #covars is the raw covars string
+    straightBootstrap <- function(trait, n, data_, boot_type, covars)
     {
         #code based on https://www.statmethods.net/advstats/bootstrapping.html
         # Bootstrap 95% CI for R-Squared
         suppressMessages(library(boot))
-        # function to obtain R-Squared from the data
-        pval <- paste0('\`', n, '\`')
-    model.lm <- as.formula(paste(trait, pval, sep = " ~ "))
-
-    theta <- function(formula, data, indices)
-    {
-        t <- lm(model.lm, data =data[indices,])
-        return(summary(t)$r.squared)
-    }
-    reps = nrow(data_) + 1
-    #reps = 2000
-        results <- boot(data = data_, statistic = theta, R =reps, formula = model.lm)
+        models.lm <- getModels(trait, n, data_, covars = covars)
+        reps = nrow(data_) + 1
+        #reps = 2000
+        results <- boot(data = data_, statistic = iterFunct, R =reps, formulas = models.lm)
+        max_i <- which(results$t == max(results$t))
+        min_i <- which(results$t == min(results$t))
+        print(paste("Max: index = ", max_i, "value = ", results$t[max_i]))
+        print(data_[max_i,])
+        print(paste("Min: index = ", min_i, "value = ", results$t[min_i]))
+        print(data_[min_i,])
 
         # get 95% confidence interval
-    t <-  boot.ci(results, type=boot_type)
-    print("here okay")
-    print(t)
-    if (boot_type == "norm") {
-        return(c(t$normal[2], t$normal[3]))
-        } else if (boot_type == "bca"){
-            return(c(t$bca[4], t$bca[5]))
-            
-        } else if (boot_type == "perc"){
-            return(c(t$percent[4], t$percent[5]))
-        } else if (boot_type == "basic") {
-            return(c(t$basic[4], t$basic[5]))
-        } else {
-            rd <- t[4]
-            print(rd)
-            return(c(rd[4], rd[5]))
-        }
+        t <-  boot.ci(results, type=boot_type)
+        if (boot_type == "norm") {
+            return(c(t$normal[2], t$normal[3]))
+            } else if (boot_type == "bca"){
+                return(c(t$bca[4], t$bca[5]))
+                
+            } else if (boot_type == "perc"){
+                return(c(t$percent[4], t$percent[5]))
+            } else if (boot_type == "basic") {
+                return(c(t$basic[4], t$basic[5]))
+            } else {
+                rd <- t[4]
+                return(c(rd[4], rd[5]))
+            }
 }
 
     getSNPCounts <- function(log_file)
@@ -203,7 +236,7 @@
                     std_error <- c(std_error, summary(lmv_prs)$coefficients[2,2])
                 }
                 quantile_covars <- data.frame(beta, std_error, quant = 1:n_quants) 
-                plt <- (ggplot(quantile_covars, aes(x=quant, y=beta)) + geom_pointrange(aes(ymin=beta-std_error, ymax=beta+std_error)) + 
+                plt <- (ggplot(quantile_covars, aes(x=quant, y=beta)) + geom_pointrange(aes(ymin=beta-(qnorm(1-0.025)*std_error), ymax=beta+(qnorm(1-0.025)*std_error)) + 
                             ylab("Effect size") + xlab("Quantile") +  scale_x_continuous(breaks=c(1:n_quants), labels=c(1:n_quants)) + 
                             ggtitle(paste("Relative Quantile plot, p = ", n, "Covariates:", covars_arg))) + theme_minimal_grid(12)
                 ggsave(filename = paste0(output, ".quantile_plot.",n, ".", style_name, ".png"), plot = plt, height = 7, width = 8.5) 
@@ -292,25 +325,6 @@
                         {
                             lmv <- lm(filt_list[[trait]] ~ filt_list[[n]])
                             r2 <- c(r2, summary(lmv)$r.squared)
-                            
-                            if (args$jackknife_ci) #
-                            {
-                                jk <- jackknifeBootstrap(trait, n, filt_list)
-                                #ci <- c(ci, jk[1])
-                                ci_upper <- c(ci_upper, jk[1])
-                                ci_lower <- c(ci_lower, -jk[1])
-                                r2_jack <- c(r2_jack, jk[2])
-
-                            } else if (args$bootstrap_ci != "") {
-                                b <- straightBootstrap(trait, n, filt_list, args$bootstrap_ci)
-                                print(b)
-                                ci_upper <- c(ci_upper, b[2])
-                                ci_lower <- c(ci_lower, b[1])
-
-                            } else {
-                                ci <- c(ci, 0)
-                                
-                            }
                             pval_beta <- c(pval_beta, summary(lmv)$coefficients[2,4])
                         }
                         else{
@@ -324,7 +338,29 @@
                             #lmv_t <-  lm(full_dat[[trait]] ~ full_dat[[args$covars]])
                             r2 <- c(r2, summary(lmv_complete)$r.squared - summary(lmv_null)$r.squared)
                             pval_beta <- c(pval_beta, summary(lmv_complete)$coefficients[2,4])
-                        }
+                         }
+                        if (args$jackknife_ci) #
+                            {
+                                jk <- jackknifeBootstrap(trait, n, filt_list, args$covars)
+                                #ci <- c(ci, jk[1])
+                                ci_upper <- c(ci_upper, jk[1])
+                                ci_lower <- c(ci_lower, -jk[1])
+                                r2_jack <- c(r2_jack, jk[2])
+
+                            } else if (args$bootstrap_ci != "") {
+                                b <- straightBootstrap(trait, n, filt_list, args$bootstrap_ci, args$covars)
+                                ci_upper <- c(ci_upper, b[2])
+                                ci_lower <- c(ci_lower, b[1])
+
+                            } else if (args$jackknife_95){
+                                jk <- jackknife95(trait, n, filt_list, args$covars)
+                                print(jk)
+                                ci_upper <- c(ci_upper, jk[2])
+                                ci_lower <- c(ci_lower, jk[1])
+                            } else {
+                                ci <- c(ci, 0)
+                                
+                            }
                         cat_name_tracker <- c(cat_name_tracker, cn)
                         pval_list <- c(pval_list, n)
                     }
@@ -366,7 +402,6 @@
         if (args$analytic_ci)
         {
             cis_r2 <- CI.Rsq(r2, nrow(filt_list), 1, level = 0.95)
-            print(cis_r2)
             #See here
             r2_bars_upper <- cis_r2$UCL
             r2_bars_lower <- cis_r2$LCL
@@ -377,11 +412,6 @@
                 r2_bars_upper <- ci_upper
                 r2_bars_lower <- ci_lower
         }
-        print(pval_list)
-        print(r2)
-        print(pval_beta)
-        print(r2_bars_upper)
-        print(r2_bars_lower)
         dat <- data.frame("pval_names" = pval_list, r2, pval_beta, "category"=cat_name_tracker, "r2_bars_upper"=r2_bars_upper,"r2_bars_lower"=r2_bars_lower)
         #got to here, haven't pushed it to the figures yet!
         #write_tsv(dat, paste0(args$output,"_r2counts.tsv"))
