@@ -545,6 +545,10 @@ def prepSNPIDs(snp_file, ss_file, ss_type, vplink = 2, max_p = 1):
             sys.exit()
         check_call(command, shell = True)
         #reset the ids we use downstream
+        #Make sure this step didn't fail- this is where most errors occur:
+        if getEntryCount(inter_sum_stats, False) == 0:
+            updateLog("There was an error matching up variants. Please make sure you have specified the correct summary statistics file and file type", True)
+            sys.exit() 
         firstColCopy(inter_sum_stats, geno_id_list)
     return local_geno, geno_id_list, inter_sum_stats
 
@@ -788,7 +792,9 @@ def buildAlignHelper(ss, ss_type):
         check_call(second, shell = True)
         check_call(final, shell = True)
     elif ss_type == "DEFAULT": #ID REf ALT BETA Pvalue
-        call = "cut -f 1 " + ss + ''' | awk -F ":" '(NR > 1) {print $1":"$2"\t"$3}' | uniq > ./aligner.t'''
+        #call = "cut -f 1 " + ss + ''' | awk -F ":" '(NR > 1) {print $1":"$2"\t"$3}' | uniq > ./aligner.t'''
+        #The goal here is to make unique entries. Trying an awk approach; we got some nonunique ones here
+        call = "cut -f 1 " + ss + ''' | awk -F ":" '(NR > 1) {print $1":"$2"\t"$3}' | awk '!a[$1]++' > ./aligner.t'''
         check_call(call, shell = True)
     else:
         print("Have not extended the method for type", ss_type, ". Please align Reference information manually")
@@ -821,7 +827,8 @@ def plinkUpdateIDsHelper(old_plink, plink_version):
     """
     #New version: replicate the pvar file fully, simply with new IDs.
     ext = ".pvar"
-    id_comm = '''awk  '(!/##/) { print $1"\t"$2"\t"$1":"$2"\t"$4"\t"$5"\t"$6"\t"$7}' ''' + old_plink + ext + ''' | sed "1s/.*/#CHROM\tPOS\tID\tREF\tALT\tFILTER\tINFO/" > std_ids.t'''
+    id_comm = '''awk  '(!/##/) { print $1"\t"$2"\t"$1":"$2"\t"$4"\t"$5}' ''' + old_plink + ext + ''' | sed "1s/.*/#CHROM\tPOS\tID\tREF\tALT/" > std_ids.t'''
+    #id_comm = '''awk  '(!/##/) { print $1"\t"$2"\t"$1":"$2"\t"$4"\t"$5"\t"$6"\t"$7}' ''' + old_plink + ext + ''' | sed "1s/.*/#CHROM\tPOS\tID\tREF\tALT\tFILTER\tINFO/" > std_ids.t'''
     if plink_version == 1:
         ext = ".bim"
         #id_comm = '''awk  '/^[^#]/ { print $2"\t"$1":"$4}' ''' + old_plink + ext + " > std_ids.t"
@@ -840,7 +847,7 @@ def alignReferenceByPlink(old_plink,plink_version, ss, ss_type, plink_path):
     remove_file = plinkRemoveDupsHelper(old_plink, plink_version)
     new_ids_file = plinkUpdateIDsHelper(old_plink, plink_version)
     ftype, ext = setFtype(plink_version)
-    
+     
         #In order to align, we need to make sure we have unique ids- so we account for multi-allelic SNPs and indels here.
         #Filter out multi-allelic snps, X-chr snps,ilter variants with missing call rates > 0.05%, and recode the names to a standard.
     try:
