@@ -75,10 +75,11 @@
     j <- jackknife(1:nrow(data), iterFunct, data= data, formulas = models.lm)
     max_i <- which(j$jack.values == max(j$jack.values))
     min_i <- which(j$jack.values == min(j$jack.values))
-    print(paste("Max: index = ", max_i, "value = ", j$jack.values[max_i]))
-     print(data[max_i,])
-    print(paste("Min: index = ", min_i, "value = ", j$jack.values[min_i]))
-    print(data[min_i,])
+    print(paste("Max R2: index = ", max_i, "value = ", j$jack.values[max_i]))
+    print(data[max_i,1])
+    print(paste("Diff from mean",j$jack.values[max_i] - mean(j$jack.values))) 
+    #print(paste("Min R2: index = ", min_i, "value = ", j$jack.values[min_i]))
+    #print(data[min_i,1])
     CI <- qt(1-0.025, nrow(data)-1) * j$jack.se
     return(c(CI, mean(j$jack.values)))
     }
@@ -236,9 +237,9 @@
                     std_error <- c(std_error, summary(lmv_prs)$coefficients[2,2])
                 }
                 quantile_covars <- data.frame(beta, std_error, quant = 1:n_quants) 
-                plt <- (ggplot(quantile_covars, aes(x=quant, y=beta)) + geom_pointrange(aes(ymin=beta-(qnorm(1-0.025)*std_error), ymax=beta+(qnorm(1-0.025)*std_error)) + 
+                plt <- (ggplot(quantile_covars, aes(x=quant, y=beta)) + geom_pointrange(aes(ymin=beta-(qnorm(1-0.025)*std_error), ymax=beta+(qnorm(1-0.025)*std_error))) + 
                             ylab("Effect size") + xlab("Quantile") +  scale_x_continuous(breaks=c(1:n_quants), labels=c(1:n_quants)) + 
-                            ggtitle(paste("Relative Quantile plot, p = ", n, "Covariates:", covars_arg))) + theme_minimal_grid(12)
+                            ggtitle(paste("Relative Quantile plot, p = ", n, "Covariates:", covars_arg)) + theme_minimal_grid(12))
                 ggsave(filename = paste0(output, ".quantile_plot.",n, ".", style_name, ".png"), plot = plt, height = 7, width = 8.5) 
             }
         
@@ -358,8 +359,8 @@
                                 ci_upper <- c(ci_upper, jk[2])
                                 ci_lower <- c(ci_lower, jk[1])
                             } else {
-                                ci <- c(ci, 0)
-                                
+                                ci_upper <- c(ci_upper, 0)
+                                ci_lower <- c(ci_lower,0)
                             }
                         cat_name_tracker <- c(cat_name_tracker, cn)
                         pval_list <- c(pval_list, n)
