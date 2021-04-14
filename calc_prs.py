@@ -30,11 +30,12 @@ START_SEQ="Start of run:"
 INDEX = 0
 B = 1
 global VAR_IN_ID
+#RUN_ID="id_error"
 MEMORY = ""
 VAR_IN_ID = True #Variants are included in ID, assumed by default
 DEBUG = True        
 DEBUG_DAT = dict()
-LOG="log_file.txt"
+#LOG = "log_error"
 ################
 class MissingGenoHandler:
     def __init__(self, ss_threshold_lengths, nsamps, pvals): #Default constructor
@@ -476,7 +477,7 @@ def readInSummaryStats(s_path):
 
 #This will extract the ids we want to be working with.
 #(args.plink_snps, args.sum_stats,args.ss_format, vplink = args.plink_version, max_p = max(pvals))
-def prepSNPIDs(snp_file, ss_file, ss_type, vplink = 2, max_p = 1):
+def prepSNPIDs(snp_file, ss_file, ss_type,output_file, vplink = 2, max_p = 1):
     """
     This extracts all the IDs from the genotype data (pvar file) that we wish to be using and selects just the data from the summary stats data we want
     @return path to the genotype ids
@@ -496,8 +497,8 @@ def prepSNPIDs(snp_file, ss_file, ss_type, vplink = 2, max_p = 1):
         print("Are you sure you specified the correct version of plink? We are unable to find the plink file you specified...")
         print("Program will quit.")
         sys.exit() 
-    geno_id_list = "geno_ids.f"
-    inter_sum_stats = "ss_filt.f" #Intersected summary stats with genotype ids
+    geno_id_list = output_file + RUN_ID + ".geno_ids.f"
+    inter_sum_stats = output_file + RUN_ID + ".ss_filt.f" #Intersected summary stats with genotype ids
     #If we have already generated our geno_id_list,skip this step:
         #Logic as follows: if the geno_ids.f file doesn't exist, or the variant IDs haven't been set to 1:123:R:A or the geno_ids file has size 0, start from scratch 
     if VAR_IN_ID and os.path.isfile("local_geno.pvar") and os.stat("local_geno.pvar") != 0 and args.preprocessing_done:
@@ -607,8 +608,11 @@ def recordSNPsWeights(curr_p,im, dat, SNPS_):
             try:
                 extract = list((itemgetter(*sel)(dat[SNPS_:]))) 
             except TypeError as e:
-                sel = np.array(sel[0])                    
-                extract = list((itemgetter(*sel)(dat[SNPS_:]))) 
+                if len(sel) == 0:
+                    extract = []
+                else:
+                    sel = np.array(sel[0])                    
+                    extract = list((itemgetter(*sel)(dat[SNPS_:]))) 
                 
             DEBUG_DAT[SNP][curr_p] = extract
                       
@@ -1023,27 +1027,31 @@ def plinkClump(reference_ld, clump_ref,clump_r,clump_kb, maf_thresh, keep_long_r
     Run plink and clump, get the new list of ids.
     Select just these from the summary statistics.
     """
+    #adding on random tags to tmp files to make more robust to simultaneous runs
+    from datetime import datetime
+    val = str(datetime.now().time()).split(".")[-1]
+    
     pre_clump_count = getEntryCount(geno_ids, False)
     updateLog("Clumping...", True)
     updateLog("SNPs prior to clumping", str(pre_clump_count))
     if clump_ref == "NA":
         #Build the file for plink to run on 
-        command = "echo SNP P > clump_ids.tmp"
+        command = "echo SNP P > clump_ids.tmp" + val
         check_call(command, shell = True)
-        command = 'cut -f 1 ' + ss + " | cut -f 1,2 -d ':' > only_ids.tmp"
+        command = 'cut -f 1 ' + ss + " | cut -f 1,2 -d ':' > only_ids.tmp" + val
         check_call(command, shell = True)
-        command = 'cut -f 5 ' + ss + " > only_ps.tmp && paste only_ids.tmp only_ps.tmp >> clump_ids.tmp" 
+        command = 'cut -f 5 ' + ss + " > only_ps.tmp" + val + " && paste only_ids.tmp" + val + " only_ps.tmp" + val + " >> clump_ids.tmp" + val 
          #Gives SNP id and p-value to assit in clumping
         check_call(command, shell = True)
         #Run plink clumping,do not use --clump-best
         #TODO:testing to see if removing long-range LD gives us a boost, as many methods seem to do this.
         
         long_range_path = os.path.dirname(__file__)
-        plink_command = "plink --bfile " + reference_ld + " --clump clump_ids.tmp --clump-p1 1 --clump-p2 1 --clump-r2 " + str(clump_r) + " --clump-kb " + str(clump_kb) + "  --clump-field P --clump-snp-field SNP --maf " + str(maf_thresh) + memoryAllocation() + " --exclude range " + long_range_path + "/long_range_ld_removal.tsv"
+        plink_command = "plink --bfile " + reference_ld + " --clump clump_ids.tmp" + val + " --clump-p1 1 --clump-p2 1 --clump-r2 " + str(clump_r) + " --clump-kb " + str(clump_kb) + "  --clump-field P --clump-snp-field SNP --maf " + str(maf_thresh) + memoryAllocation() + " --exclude range " + long_range_path + "/long_range_ld_removal.tsv"
  
         #plink_command = "plink --bfile " + reference_ld + " --clump clump_ids.tmp --clump-p1 1 --clump-p2 1 --clump-r2 " + str(clump_r) + " --clump-kb " + str(clump_kb) + "  --clump-field P --clump-snp-field SNP --maf " + str(maf_thresh) + memoryAllocation() + " --exclude range /work-zfs/abattle4/ashton/prs_dev/prs_tools/long_range_ld_removal.tsv"
         if keep_long_range:
-            plink_command = "plink --bfile " + reference_ld + " --clump clump_ids.tmp --clump-p1 1 --clump-p2 1 --clump-r2 " + str(clump_r) + " --clump-kb " + str(clump_kb) + "  --clump-field P --clump-snp-field SNP --maf " + str(maf_thresh) + memoryAllocation()
+            plink_command = "plink --bfile " + reference_ld + " --clump clump_ids.tmp" + val + " --clump-p1 1 --clump-p2 1 --clump-r2 " + str(clump_r) + " --clump-kb " + str(clump_kb) + "  --clump-field P --clump-snp-field SNP --maf " + str(maf_thresh) + memoryAllocation()
         updateLog(plink_command)
         check_call(plink_command, shell = True)
         clump_file = "plink.clumped" #The default output name with flag clump
@@ -1051,12 +1059,12 @@ def plinkClump(reference_ld, clump_ref,clump_r,clump_kb, maf_thresh, keep_long_r
         print("Using provided reference clump...")
         clump_file = clump_ref
     #Get a way to map from one to the other
-    temp_ids = '''cut -f 1,2 -d ":" ''' + ss + " > t && paste  t " + ss + " > id_mapper.tmp && rm t"
+    temp_ids = '''cut -f 1,2 -d ":" ''' + ss + " > t" + val + " && paste  t"+ val + " " + ss + " > id_mapper.tmp" + val + " && rm t"+val
     check_call(temp_ids, shell = True)
-    command = "awk '(FNR == NR) {a[$3];next} ($1 in a) {print $0}' " + clump_file + " id_mapper.tmp | cut -f 2,3,4,5,6  > t && mv t "+ ss
+    command = "awk '(FNR == NR) {a[$3];next} ($1 in a) {print $0}' " + clump_file + " id_mapper.tmp" + val + " | cut -f 2,3,4,5,6  > t && mv t "+ ss
     check_call(command, shell = True)
     if not DEBUG:
-        command = "rm *.tmp"
+        command = "rm *.tmp" + val
         check_call(command, shell = True)
     #Update geno_ids for extraction.
     firstColCopy(ss, geno_ids)
@@ -1077,7 +1085,7 @@ def writeScores(scores, ids,args): #subset_files,dest_path):
         tab_out = pd.DataFrame.from_dict(full)
         tab_out = tab_out.set_index("IID")
         tab_out = tab_out.round(5)
-        tab_out.to_csv(dest_path + '.full_prs.scores.tsv', sep = '\t') 
+        tab_out.to_csv(dest_path + 'full_prs.scores.tsv', sep = '\t') 
 
     subset_list = subset_files.split(',')
     if (len(subset_list) != len(scores)) and (len(subset_list) + 1 != len(scores)): #Subset_lists will always have 1, because its an empty string
@@ -1176,10 +1184,16 @@ if __name__ == '__main__':
     args = parser.parse_args()
     DEBUG = args.debug
     start = time.time()    
+    global LOG
+    LOG = args.output + "log_file.txt"
     #Extract the pvalues to asses at
     updateLog(START_SEQ, str(datetime.datetime.now()), '\n', "------------------------------")
     args_print = str(args).split(",")[1:]
     updateLog("Arguments", '\n'.join(args_print))
+    #assign the run a global identifier:
+    global RUN_ID 
+    RUN_ID = str(start)
+    updateLog("Run ID", RUN_ID,True) 
     if args.pvals != "ALL":
         t = (args.pvals).strip().split(",")
     else:
@@ -1207,7 +1221,7 @@ if __name__ == '__main__':
         print("Genotype ref/alt SNPs will not be aligned to GWAS ref/alt SNPs. Please use the --align_ref to align them")
         
     print("Selecting IDs for analysis...")
-    local_pvar, geno_ids, ss_parse = prepSNPIDs(args.plink_snps, args.sum_stats,args.ss_format, vplink = args.plink_version, max_p = max(pvals))
+    local_pvar, geno_ids, ss_parse = prepSNPIDs(args.plink_snps, args.sum_stats,args.ss_format,args.output, vplink = args.plink_version, max_p = max(pvals))
     num_pat = getPatientCount(args.plink_snps, args.plink_version)
     updateLog("Number of patients detected in sample:", str(num_pat), True)
     updateLog("Time for preprocessing (SNP filtering, reference alignment if specified, etc.):", str(time.time() - start), True)
