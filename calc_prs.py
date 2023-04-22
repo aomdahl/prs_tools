@@ -420,7 +420,7 @@ def quickSubset(left, right, overwrite = False):
     
     if overwrite:
         outfile = right
-        command = "awk '(FNR == NR) {arr[$1];next} ($1 in arr) {print $0}' " + left + " " + right + " > t && mv t " + outfile
+        command = "awk '(FNR == NR) {arr[$1];next} ($1 in arr) {print $0}' " + left + " " + right + " > t" +  RUN_ID + " && mv t" + RUN_ID + " " + outfile
         
     check_call(command, shell = True)
     return outfile
@@ -1022,11 +1022,18 @@ def plinkToMatrix(snp_keep, args, local_pvar, vplink, plink_path):
     return "mat_form_tmp"
 
 #TODO: fix the id syst" + clumping, make sure consisent
-def plinkClump(reference_ld, clump_ref,clump_r,clump_kb, maf_thresh, keep_long_range, geno_ids, ss):
+def plinkClump(argv, geno_ids, ss):
     """
     Run plink and clump, get the new list of ids.
     Select just these from the summary statistics.
     """
+    reference_ld = argv.ld_ref
+    clump_ref = argv.clump_ref
+    clump_r = argv.clump_r2
+    clump_kb = argv.clump_kb
+    maf_thresh = argv.maf
+    keep_long_range = argv.keep_lr_ld
+    genome_build = argv.genome_build 
     #adding on random tags to tmp files to make more robust to simultaneous runs
     from datetime import datetime
     val = str(datetime.now().time()).split(".")[-1]
@@ -1047,7 +1054,11 @@ def plinkClump(reference_ld, clump_ref,clump_r,clump_kb, maf_thresh, keep_long_r
         #TODO:testing to see if removing long-range LD gives us a boost, as many methods seem to do this.
         
         long_range_path = os.path.dirname(__file__)
-        plink_command = "plink --bfile " + reference_ld + " --clump clump_ids.tmp" + val + " --clump-p1 1 --clump-p2 1 --clump-r2 " + str(clump_r) + " --clump-kb " + str(clump_kb) + "  --clump-field P --clump-snp-field SNP --maf " + str(maf_thresh) + memoryAllocation() + " --exclude range " + long_range_path + "/long_range_ld_removal.tsv"
+        if genome_build == "hg38":
+            lr_ref = "/long_range_ld_removal.hg38.tsv"
+        else:
+            lr_ref = "/long_range_ld_removal.hg19.tsv" 
+        plink_command = "plink --bfile " + reference_ld + " --clump clump_ids.tmp" + val + " --clump-p1 1 --clump-p2 1 --clump-r2 " + str(clump_r) + " --clump-kb " + str(clump_kb) + "  --clump-field P --clump-snp-field SNP --maf " + str(maf_thresh) + memoryAllocation() + " --exclude range " + long_range_path + lr_ref
  
         #plink_command = "plink --bfile " + reference_ld + " --clump clump_ids.tmp --clump-p1 1 --clump-p2 1 --clump-r2 " + str(clump_r) + " --clump-kb " + str(clump_kb) + "  --clump-field P --clump-snp-field SNP --maf " + str(maf_thresh) + memoryAllocation() + " --exclude range /work-zfs/abattle4/ashton/prs_dev/prs_tools/long_range_ld_removal.tsv"
         if keep_long_range:
@@ -1061,7 +1072,7 @@ def plinkClump(reference_ld, clump_ref,clump_r,clump_kb, maf_thresh, keep_long_r
     #Get a way to map from one to the other
     temp_ids = '''cut -f 1,2 -d ":" ''' + ss + " > t" + val + " && paste  t"+ val + " " + ss + " > id_mapper.tmp" + val + " && rm t"+val
     check_call(temp_ids, shell = True)
-    command = "awk '(FNR == NR) {a[$3];next} ($1 in a) {print $0}' " + clump_file + " id_mapper.tmp" + val + " | cut -f 2,3,4,5,6  > t && mv t "+ ss
+    command = "awk '(FNR == NR) {a[$3];next} ($1 in a) {print $0}' " + clump_file + " id_mapper.tmp" + val + " | cut -f 2,3,4,5,6  > t" + val + " && mv t"+ val + " " +  ss
     check_call(command, shell = True)
     if not DEBUG:
         command = "rm *.tmp" + val
@@ -1177,7 +1188,9 @@ if __name__ == '__main__':
     parser.add_argument("--select_vars", help = 'Specify a list of variants that you want in the analysis. Please submit list in the format chr#:pos:ref:alt')
     parser.add_argument("--subsets_only", help = "Score only on subsets indicated, not on the full list", action = "store_true", default = False)
     parser.add_argument("--clump_kb", help = "Specify the window size for clumping in kb.", default = 250)
-    parser.add_argument("--keep_lr_ld", help = "Keep regions of long-range LD, which are removed by default. Coordinates used are in hg19, so omit this if in GrCH38.", action = "store_true", default = False) 
+    parser.add_argument("--genome_build", help = "Specify genome build.", choices = ["hg19", "hg38"],  default = "hg19")    #TODO: what other things do I need to account for with long range LD? 
+    parser.add_argument("--keep_lr_ld", help = "Keep regions of long-range LD, which are removed by default. Coordinates now available in both hg19 and GrCH38.", action = "store_true", default = False)
+     
     parser.add_argument("--no_overwrite", help = "Do not overwrite a local ss_filt or geno_ids file, make a new one. May create problems downstream, unclear.", action = "store_true", default = False) 
     parser.add_argument("--inverted_snp_encoding", help = "Specify this if SNP encodins of 0/1/2 is opposite of usual, such that 2 represents a homozgyous of the the reference allele (i.e. not the standard alternate allele dosage", default = False, action = "store_true")
     parser.add_argument("--keep_matrix", action = "store_true", help = "Select this if you wish to keep the human readable matrix after analysis. pipeline by default will remove it", default = False)
@@ -1231,7 +1244,8 @@ if __name__ == '__main__':
        geno_ids, ss_parse = selectSubset(args.select_vars, geno_ids, ss_parse, not args.no_overwrite) #if no_overwrite is True, select subset will not overwrite.  
 
     if args.clump:
-        ss_parse, geno_ids = plinkClump(args.ld_ref, args.clump_ref,args.clump_r2,args.clump_kb, args.maf, args.keep_lr_ld, geno_ids, ss_parse)
+        #ss_parse, geno_ids = plinkClump(args.ld_ref, args.clump_ref,args.clump_r2,args.clump_kb, args.maf, args.keep_lr_ld, geno_ids, ss_parse)
+        ss_parse, geno_ids = plinkClump(args, geno_ids, ss_parse)
     print("Preprocessing complete")
     if args.preprocess_only:
         updateLog("Plink file data has been updated into new_plink.*. Use this in downstream runs.", True)

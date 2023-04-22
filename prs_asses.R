@@ -33,11 +33,37 @@
     parser$add_argument("--jackknife_ci", type = "logical", help = "Include jackknife CIs", default = FALSE, action = "store_true")
     parser$add_argument("--bootstrap_ci", type = "character", help = "Include boostrap CIs, specify type (norm,basic, perc,bca)", default = "")
     parser$add_argument("--analytic_ci", type = "logical", help = "calculate CIs using the formula", default = FALSE, action = "store_true")
+    parser$add_argument("--stdize_prs", type = "logical", help = "scale and center the PRS", default = FALSE, action = "store_true")    
     parser$add_argument("--jackknife_95", type = "logical", help = "calculate CIs using Jackknife empirical bounds", default = FALSE, action = "store_true")
     parser$helpme()
     args <- parser$get_args()
     options(readr.num_columns = 0)
     #A function to plot the correlation bar plots
+    
+    
+  bestSamples <- function()
+  {
+    pname = paste0("\`",n,"\`")
+    f_full <- as.formula(paste(trait, paste(pname,"+", args$covars), sep = " ~ "))
+    f_part <-  as.formula(paste(trait, args$covars,sep = " ~ "))
+    #Oct 4- investigation of interest
+    #What do the individuals who give the BEST R2 have in common?
+    if(args$subset_samples)
+    {
+      filt_list_reg <- bestSamples(filt_list, f_full, f_part)
+    }
+    else
+    {
+      filt_list_reg <- filt_list
+    }
+    lmv_complete <- lm(f_full, data = filt_list)
+    #lmv_corr <- lm(full_dat[[trait]] ~ full_dat[[n]] + full_dat[[args$covars]])
+    
+    lmv_null <- lm(f_part, data = filt_list_reg)
+    #lmv_t <-  lm(full_dat[[trait]] ~ full_dat[[args$covars]])
+    r2 <- c(r2, summary(lmv_complete)$r.squared - summary(lmv_null)$r.squared)
+    pval_beta <- c(pval_beta, summary(lmv_complete)$coefficients[2,4])
+  }
 
     getModels <- function(trait, n, data_, covars = "")
     {
@@ -180,8 +206,8 @@
             base <- base + labs(x="P-value threshold", y = expression(paste("Per-snp R" ^ "2")))
         }
 
-        base + theme_minimal_grid(10) + geom_errorbar(aes(x=pval_names, ymin=r2_bars_lower, ymax= r2_bars_upper))
-        ggsave(filename = paste0(output, "bar_plot.",style_name, ".png"), height = 7, width = 8.5) 
+        base + theme_minimal_grid(15) + theme(axis.text.x = element_text(angle=45, hjust=1))  + geom_errorbar(aes(x=pval_names, ymin=r2_bars_lower, ymax= r2_bars_upper)) 
+        ggsave(filename = paste0(output, "bar_plot.",style_name, ".png"), height = 7, width = 9) 
     }
     #Make a quantile plot
     plotQuantile <- function(dat, trait, output, n_quants, style_name, covars_arg)
@@ -297,6 +323,11 @@
         full_dat <- inner_join(prs, phenos, by = "IID")
         print(paste0(nrow(full_dat), " individuals had both PRS scores and phenotype data"))
         pval_names <- names(prs %>% dplyr::select(-IID))
+        if(args$stdize_prs) 
+        {
+            full_dat[,pval_names] <- scale(full_dat[,pval_names], scale. = TRUE)
+
+        }
         full_dat <- na.omit(full_dat)
         #If the trait is continuous, do regular R2.
         for (cn in cat_names)
@@ -316,8 +347,9 @@
                     if (args$irnt)
                     {
                         filt_list[[paste0("unscaled_", trait)]] = filt_list[[trait]]
-                        temp_ <- as.numeric(scale(filt_list[[trait]]))
-                        filt_list[[trait]] <- rankNorm(temp_)
+                        temp_ <- as.numeric(scale(filt_list[[trait]], scale. = TRUE))
+                        filt_list[[trait]] <- temp_ #Modified on feb 15 to just center and scale
+#                        filt_list[[trait]] <- rankNorm(temp_)
                     }
                     for (n in pval_names)
                     {
@@ -332,10 +364,21 @@
                             
                             pname = paste0("\`",n,"\`")
                             f_full <- as.formula(paste(trait, paste(pname,"+", args$covars), sep = " ~ "))
+                            f_part <-  as.formula(paste(trait, args$covars,sep = " ~ "))
+                            #Oct 4- investigation of interest
+                            #What do the individuals who give the BEST R2 have in common?
+                            if(args$subset_samples)
+                            {
+                              filt_list_reg <- bestSamples(filt_list, f_full, f_part)
+                            }
+                            else
+                            {
+                              filt_list_reg <- filt_list
+                            }
                             lmv_complete <- lm(f_full, data = filt_list)
                             #lmv_corr <- lm(full_dat[[trait]] ~ full_dat[[n]] + full_dat[[args$covars]])
-                            f_part <-  as.formula(paste(trait, args$covars,sep = " ~ "))
-                            lmv_null <- lm(f_part, data = filt_list)
+                 
+                            lmv_null <- lm(f_part, data = filt_list_reg)
                             #lmv_t <-  lm(full_dat[[trait]] ~ full_dat[[args$covars]])
                             r2 <- c(r2, summary(lmv_complete)$r.squared - summary(lmv_null)$r.squared)
                             pval_beta <- c(pval_beta, summary(lmv_complete)$coefficients[2,4])

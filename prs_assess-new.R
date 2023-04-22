@@ -85,7 +85,7 @@ plotCorr <- function(dat, output, style_name, category_var, no_pvals, per_snp=FA
         base <- base + labs(x="P-value threshold", y = expression(paste("Per-snp R" ^ "2")))
     }
 
-    base + theme_minimal_grid(10) + geom_errorbar(aes(x=pval_names, ymin=UCL, ymax=LCL))
+    base + theme_minimal_grid(10) 
     ggsave(filename = paste0(output, "bar_plot.",style_name, ".png"), height = 7, width = 8.5) 
 }
 #Make a quantile plot
@@ -96,9 +96,9 @@ plotQuantile <- function(dat, trait, output, n_quants, style_name, covars_arg)
     {
         for_plot <-  dat %>% mutate(quantile = ntile(dat[[n]], n_quants)) 
         if(covars[1] != "")
-        {for_plot <- for_plot %>% dplyr::select(IID, all_of(n), quantile, all_of(trait), all_of(covars)) %>% filter(!(is.na(trait))) %>% ungroup()}
+        {for_plot <- for_plot %>% select(IID, all_of(n), quantile, all_of(trait), all_of(covars)) %>% filter(!(is.na(trait))) %>% ungroup()}
         else
-        {for_plot <- for_plot %>% dplyr::select(IID, all_of(n), quantile, all_of(trait)) %>% filter(!(is.na(trait))) %>% ungroup()}
+        {for_plot <- for_plot %>% select(IID, all_of(n), quantile, all_of(trait)) %>% filter(!(is.na(trait))) %>% ungroup()}
         xounts <- count(for_plot, quantile)
         avgs <- for_plot %>% group_by(quantile) %>% dplyr::summarize(avg = mean(!!as.symbol(trait)), std_dev = sd(!!as.symbol(trait))) %>% arrange(quantile) %>% mutate(num = xounts$n) %>% mutate(sem = std_dev/sqrt(num))
         #Simple one
@@ -151,6 +151,8 @@ plotQuantile <- function(dat, trait, output, n_quants, style_name, covars_arg)
     }
 }
 
+
+
 '%ni%' <- Negate('%in%')
 if(length(args$prs_results) == 0)
 {
@@ -161,8 +163,6 @@ if(length(args$prs_results) == 0)
 print("Starting assesment....")
 fl <- c(args$prs_results)
 r2 <- c()
-r2_bars_upper <- c()
-r2_bars_lower <- c()
 pval_beta <- c()
 r2_name <- args$r2
 pval_names <- c()
@@ -170,16 +170,14 @@ pval_list <- c()
 cat_name_tracker <- c()
 trait <- args$risk_trait
 cat_split <- args$category_split
-print("check 1")
 if(cat_split == '')
 {
-        alt_cols <-  unlist(as.list(strsplit(args$covars, '+', fixed = T)[[1]]))
-        select_cols <- c("IID", trait, alt_cols)
+        select_cols <- c("IID", trait, unlist(as.list(strsplit(args$covars, '+', fixed = T)[[1]])))
 }else{
     select_cols <- c("IID", trait,cat_split, unlist(as.list(strsplit(args$covars, '+', fixed = T)[[1]])))
 }
-#phenos <- read_delim(args$pheno, delim = args$delim) %>% select(unlist(select_cols)) %>% na.omit()
-phenos <- read_delim(args$pheno, delim = args$delim) %>% dplyr::select(unlist(select_cols)) %>% na.omit()
+phenos <- read_delim(args$pheno, delim = args$delim) %>% select(unlist(select_cols)) %>% na.omit()
+
 print(paste0("Phenotype data for ", nrow(phenos), " individuals"))
 #Set up if splitting by categories
 
@@ -187,7 +185,7 @@ if(cat_split == '')
 {
     cat_names <- c('')
 }else{
-    cat_names <- unlist(unique(phenos %>% dplyr::select(all_of(cat_split))))
+    cat_names <- unlist(unique(phenos %>% select(all_of(cat_split))))
     }
 for (f in fl)
 {
@@ -199,7 +197,7 @@ for (f in fl)
     #full_dat contains the PRS scores at each p-value for each sample, their phenotypes, and the associated covariates to correct for.
     full_dat <- inner_join(prs, phenos, by = "IID")
     print(paste0(nrow(full_dat), " individuals had both PRS scores and phenotype data"))
-    pval_names <- names(prs %>% dplyr::select(-IID))
+    pval_names <- names(prs %>% select(-IID))
     full_dat <- na.omit(full_dat)
     #If the trait is continuous, do regular R2.
     for (cn in cat_names)
@@ -226,6 +224,7 @@ for (f in fl)
                 {
                     if(args$covars == "")
                     {
+                        #r2 <- c(r2, cor(full_dat[trait], full_dat[n]))
                         lmv <- lm(filt_list[[trait]] ~ filt_list[[n]])
                         r2 <- c(r2, summary(lmv)$r.squared)
                         pval_beta <- c(pval_beta, summary(lmv)$coefficients[2,4])
@@ -242,6 +241,10 @@ for (f in fl)
                         r2 <- c(r2, summary(lmv_complete)$r.squared - summary(lmv_null)$r.squared)
                         pval_beta <- c(pval_beta, summary(lmv_complete)$coefficients[2,4])
                     }
+                    #See here
+                    r2_bars_upper <- c()
+                    r2_bars_lower <- c()
+                    CI.Rsq(r2, nrow(f, k, level = 0.95)
                     cat_name_tracker <- c(cat_name_tracker, cn)
                     pval_list <- c(pval_list, n)
                 }
@@ -278,15 +281,10 @@ for (f in fl)
                 pval_list <- c(pval_list,p)
             }
         }
-    }
-    cis_r2 <- CI.Rsq(r2, nrow(filt_list), 1, level = 0.95)
-    #print(cis_r2)
-    #See here
-    #r2_bars_upper <- c(r2_bars_upper, cis_r2[4])
-    #r2_bars_lower <- c(r2_bars_lower, cis_r2[3])
+        #pval_names <- c(pval_names, str_extract(f, "[501]\\.*[\\-e\\d]+"))
 
-    dat <- data.frame("pval_names" = pval_list, r2, pval_beta, "category"=cat_name_tracker, "r2_bars_upper"=cis_r2[4],"r2_bars_lower"=cis_r2[3])
-    #got to here, haven't pushed it to the figures yet!
+    }
+    dat <- data.frame("pval_names" = pval_list, r2, pval_beta, "category"=cat_name_tracker)
     #write_tsv(dat, paste0(args$output,"_r2counts.tsv"))
     plotCorr(dat, args$output, r2_name,cat_split, args$hide_pvals, per_snp=F)
 }
@@ -303,13 +301,12 @@ if(args$per_snp_r2 != "")
 {
     snp_counts <- getSNPCounts(args$per_snp_r2) %>% arrange(pval_names)
     t <- dat %>% arrange(pval_names)
-    full <- cbind(t,(snp_counts %>% dplyr::select(snp_counts))) %>% mutate("r2_per_snp" = r2/snp_counts)
+    full <- cbind(t,(snp_counts %>% select(snp_counts))) %>% mutate("r2_per_snp" = r2/snp_counts)
     full$pval_names <- as.numeric(as.character(full$pval_names))
     full <- arrange(full, pval_names)
     write_tsv(full, paste0(args$output, "_per-snp-r2.tsv"))
-    full <- full %>% dplyr::select(-r2) %>% rename("r2" = r2_per_snp)
+    full <- full %>% select(-r2) %>% rename("r2" = r2_per_snp)
     plotCorr(full, paste0(args$output, "_per-snp-r2"), r2_name,cat_split,args$hide_pvals, per_snp = T)
 }
 print("Finished plotting!")
-
 
